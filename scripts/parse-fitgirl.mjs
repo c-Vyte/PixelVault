@@ -147,7 +147,7 @@ function logProgress(current, total, extra = "") {
 }
 
 function isPreferredHoster(url) {
-  return /datanodes\.to|fuckingfast\.co|filekeeper|pixeldrain\.com|gofile\.io/i.test(url);
+  return /datanodes\.to|fuckingfast\.co|filekeeper|fileskeep|pixeldrain\.com|gofile\.io/i.test(url);
 }
 
 function canonicalHoster(url, fallback = "") {
@@ -157,11 +157,12 @@ function canonicalHoster(url, fallback = "") {
   if (/datanodes\.to/.test(s)) return "Datanodes";
   if (/pixeldrain\.com/.test(s)) return "PixelDrain";
   if (/fuckingfast\.co/.test(s)) return "FuckingFast";
-  if (/filekeeper|filekeep/.test(s)) return "FileKeeper";
+  if (/fileskeep\.(com|net|org)/.test(s)) return "FilesKeep";
+  if (/filekeeper/.test(s)) return "FileKeeper";
   if (/krakenfiles\.com/.test(s)) return "KrakenFiles";
   if (/gofile\.io/.test(s)) return "Gofile";
   if (/1fichier\.com/.test(s)) return "1Fichier";
-  if (/mega\.nz/.test(s)) return "Mega";
+  if (/mega\.(nz|co\.nz|io)/.test(s)) return "Mega";
   if (/mediafire\.com/.test(s)) return "MediaFire";
   if (/uptobox\.com/.test(s)) return "Uptobox";
   if (/mixdrop\.co/.test(s)) return "Mixdrop";
@@ -185,7 +186,7 @@ async function fetchPasteLinks(pasteUrl) {
   try {
     const html = await fetchWithRetry(pasteUrl, 2);
     const links = [];
-    const rex = /<a\s+href="(https?:\/\/(?:datanodes\.to|fuckingfast\.co|filekeeper\.net|pixeldrain\.com|gofile\.io|krakenfiles\.com|buzzheavier\.com|bzzhr\.co|1fichier\.com|mega\.nz|mediafire\.com|uptobox\.com|mixdrop\.co|devuploads\.com|hexupload\.net|racaty\.io|sendcm\.com)[^"]*)"[^>]*>([^<]*)<\/a>/gi;
+        const rex = /<a\s+href="(https?:\/\/(?:datanodes\.to|fuckingfast\.co|filekeeper\.net|fileskeep\.(?:com|net|org)|pixeldrain\.com|gofile\.io|krakenfiles\.com|buzzheavier\.com|bzzhr\.co|1fichier\.com|mega\.(?:nz|co\.nz|io)|mediafire\.com|uptobox\.com|mixdrop\.co|devuploads\.com|hexupload\.net|racaty\.io|sendcm\.com)[^"]*)"[^>]*>([^<]*)<\/a>/gi;
     let m;
     while ((m = rex.exec(html)) !== null) {
       links.push({ url: m[1], name: decodeHtmlEntities(m[2]).trim() });
@@ -476,7 +477,7 @@ async function parseGamePage(html, url) {
       if (spoilerMatch) {
         const spoilerContent = spoilerMatch[1];
         const fileLinkRegex =
-          /<a\s+href="(https?:\/\/(?:datanodes\.to|fuckingfast\.co|filekeeper\.net|filekeep|krakenfiles\.com|filepress\.org|streamtape\.com|pixeldrain\.com|gofile\.io|devuploads\.com|mixdrop\.co|uptobox\.com|mega\.nz|mediafire\.com|1fichier\.com|google\.com\/drive|onedrive\.live\.com|hexupload\.net|racaty\.io|voe\.sx|doodstream\.com|streamlare\.com|streamvid\.net|mp4upload\.com|filecrypt\.cc)[^"]*)"[^>]*>([^<]*)<\/a>/gi;
+          /<a\s+href="(https?:\/\/(?:datanodes\.to|fuckingfast\.co|filekeeper\.net|fileskeep\.(?:com|net|org)|krakenfiles\.com|filepress\.org|streamtape\.com|pixeldrain\.com|gofile\.io|devuploads\.com|mixdrop\.co|uptobox\.com|mega\.(?:nz|co\.nz|io)|mediafire\.com|1fichier\.com|google\.com\/drive|onedrive\.live\.com|hexupload\.net|racaty\.io|voe\.sx|doodstream\.com|streamlare\.com|streamvid\.net|mp4upload\.com|filecrypt\.cc)[^"]*)"[^>]*>([^<]*)<\/a>/gi;
         let fileMatch;
         while ((fileMatch = fileLinkRegex.exec(spoilerContent)) !== null) {
           const fileUrl = fileMatch[1];

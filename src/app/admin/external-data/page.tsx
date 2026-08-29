@@ -139,16 +139,22 @@ function toSoftware(item: any, source: string): Software {
     }
     // prioritize datanodes/fuckingfast over torrent
     if (links.length > 1) {
-      const hasPreferred = links.some(l => /datanodes|fuckingfast|pixeldrain|gofile|buzzheavier|bzzhr/i.test(l.url) && l.type !== "torrent");
+      const hasPreferred = links.some(l => /datanodes|fuckingfast|filekeeper|fileskeep|pixeldrain|gofile|buzzheavier|bzzhr|krakenfiles|1fichier|mediafire|mega\.|multiup/i.test(l.url) && l.type !== "torrent");
       if (hasPreferred) {
         // keep torrent as fallback but sort preferred first
         const score = (u: string) => {
           if (/datanodes/i.test(u)) return 100;
           if (/fuckingfast/i.test(u)) return 95;
-          if (/pixeldrain/i.test(u)) return 90;
+          if (/filekeeper/i.test(u)) return 92;
+          if (/fileskeep/i.test(u)) return 90;
+          if (/pixeldrain/i.test(u)) return 88;
           if (/gofile/i.test(u)) return 85;
           if (/buzzheavier|bzzhr/i.test(u)) return 80;
+          if (/krakenfiles/i.test(u)) return 75;
           if (/1fichier/i.test(u)) return 70;
+          if (/mediafire/i.test(u)) return 60;
+          if (/mega\.(nz|co\.nz|io)/i.test(u)) return 55;
+          if (/multiup/i.test(u)) return 45;
           if (/^magnet:/i.test(u) || /torrent/i.test(u)) return 0;
           return 10;
         };

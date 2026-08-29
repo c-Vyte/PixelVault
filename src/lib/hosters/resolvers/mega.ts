@@ -66,10 +66,9 @@ export const megaResolver: HosterResolver = {
     if (!parsed) return { ...base, reason: "Could not parse MEGA link" };
 
     try {
-      // Folders: use "p" with "n" node type; files: "g":1 for public file info.
-      const body = parsed.kind === "folder"
-        ? [{ a: "g", n: parsed.id, g: 1 }]
-        : [{ a: "g", g: 1, p: parsed.id }];
+      // Public file AND folder links use the same "g" request with "p" set to
+      // the public handle. Files answer {s, at}; folders answer {f:[nodes],ok}.
+      const body = [{ a: "g", g: 1, p: parsed.id }];
 
       const res = await hosterRequest("https://g.api.mega.co.nz/cs", {
         method: "POST",
@@ -92,8 +91,13 @@ export const megaResolver: HosterResolver = {
         return { ...base, alive: false, reason: megaErrorReason(rec?.ea) };
       }
 
-      // "s" (size) present on files means the node exists. Folders return an "f"/"ok" array.
-      const alive = typeof rec.s === "number" || Array.isArray((rec as { ok?: unknown }).ok) || typeof rec.at === "string";
+      // "s" (size) present on files means the node exists. Folders return an
+      // "f" node array; embeds may return "at".
+      const alive =
+        typeof rec.s === "number" ||
+        typeof rec.at === "string" ||
+        Array.isArray((rec as { f?: unknown }).f) ||
+        Array.isArray((rec as { ok?: unknown }).ok);
       if (!alive) {
         return { ...base, alive: false, reason: megaErrorReason(undefined) };
       }

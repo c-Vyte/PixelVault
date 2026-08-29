@@ -17,12 +17,6 @@ import { hosterRequest } from "../hosterHttp";
 // Direct MediaFire download hosts (download123.mediafire.com / download.mediafire.com)
 const DIRECT_RE = /https?:\/\/download\d*\.mediafire\.com\/[^\s"'<>\\]+/i;
 
-function parseFileKey(url: string): string | null {
-  // /file/<alphanum>/<name>/...  or  /download/<alphanum>/...
-  const m = url.match(/mediafire\.com\/(?:file|download(?:\.php)?|conv)\/(?:[a-z0-9]+\/)?([a-z0-9]{5,})/i);
-  return m ? m[1] : null;
-}
-
 export const mediafireResolver: HosterResolver = {
   meta: HOSTERS.mediafire,
 
@@ -39,8 +33,8 @@ export const mediafireResolver: HosterResolver = {
       ok: false,
     };
     try {
-      if (!parseFileKey(url)) return { ...base, reason: "Could not parse MediaFire file key" };
-
+      // Best-effort: fetch whatever mediafire.com URL we were given and look
+      // for the direct link / a missing-file marker.
       const res = await hosterRequest(url, { signal, timeoutMs });
 
       // Instant download / non-HTML → the link itself is the file

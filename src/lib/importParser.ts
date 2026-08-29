@@ -207,7 +207,7 @@ export function fileNameFromUrlHash(url: string): string {
 }
 
 const FILE_HOSTS =
-  /(mega\.nz|mega\.co\.nz|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org)/;
+  /(mega\.nz|mega\.co\.nz|mega\.io|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org)/;
 
 export function isDownloadHref(href: string, base: string): boolean {
   if (SKIP_HREF.test(href)) return false;
@@ -219,9 +219,11 @@ export function isDownloadHref(href: string, base: string): boolean {
     const search = u.search.toLowerCase();
     if (path.endsWith(".torrent")) return true;
     if (search.includes("do=download")) return true;
+    // Known file-hoster links are downloads even when the path contains a
+    // nav-ish word (e.g. mega.io/folder/<id>) — check the host first.
+    if (FILE_HOSTS.test(host)) return true;
     if (NAV_WORDS.test(path)) return false;
     if (/\/(download|d\/|get|dl|load|file)\b/.test(path)) return true;
-    if (FILE_HOSTS.test(host)) return true;
   } catch {
     return false;
   }
@@ -261,6 +263,8 @@ export function linkDisplayName(url: string): string {
       "mediafire.com": "MediaFire",
       "fileskeep.com": "FilesKeep",
       "www.fileskeep.com": "FilesKeep",
+      "fileskeep.net": "FilesKeep",
+      "fileskeep.org": "FilesKeep",
       "drive.google.com": "Google Drive",
       "store.steampowered.com": "Steam",
       "store.epicgames.com": "Epic Games",
