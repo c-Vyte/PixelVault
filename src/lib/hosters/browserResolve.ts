@@ -48,10 +48,17 @@ export async function browserResolveHoster(
   if (!ctx) return null;
   const { page, release } = ctx;
 
+  const labels: Record<string, string> = {
+    datanodes: "DataNodes",
+    fuckingfast: "FuckingFast",
+    fileskeep: "FilesKeep",
+    filekeeper: "FileKeeper",
+    "1fichier": "1Fichier",
+  };
   const base: ResolveResult = {
     inputUrl: url,
     hoster: hoster as ResolveResult["hoster"],
-    label: hoster === "datanodes" ? "DataNodes" : hoster === "fuckingfast" ? "FuckingFast" : "File host",
+    label: labels[hoster] || "File host",
     ok: false,
     via: "browser",
   };
@@ -121,6 +128,30 @@ export async function browserResolveHoster(
       // Fallback: click the download button and wait for a popup/download
       await page.click('a:has-text("DOWNLOAD"), button:has-text("DOWNLOAD"), [hx-post], .btn').catch(() => {});
       await page.waitForTimeout(3500);
+    } else if (hoster === "fileskeep" || hoster === "filekeeper") {
+      // XFileSharing-style: wait past any countdown/Turnstile then click the
+      // free-download button and watch for a download node navigation.
+      const direct = await page.evaluate(async () => {
+        try {
+          // Some XFS builds submit the download form via AJAX to /.
+          const btn = document.querySelector('#downloadbtn, a.btn_down, button[type="submit"], a[href*="op=download2"]') as HTMLElement | null;
+          const form = document.querySelector('form[action*="download"], form[method="post"]') as HTMLFormElement | null;
+          if (form && btn) {
+            btn.click();
+          }
+          await new Promise((r) => setTimeout(r, 1500));
+          const html = document.documentElement.innerHTML;
+          const m = html.match(/https?:\/\/[a-z0-9.-]+\/[^\s"'<>\\]*\.(?:rar|zip|7z|exe|iso|bin|mp4|mkv)[^\s"'<>\\]*/i);
+          return m ? m[0] : null;
+        } catch {
+          return null;
+        }
+      }, url).catch(() => null);
+
+      if (direct) return { ...base, ok: true, alive: true, directUrl: direct };
+
+      await page.click('#downloadbtn, a.btn_down, button:has-text("Download"), a:has-text("Download"), .btn').catch(() => {});
+      await page.waitForTimeout(5000);
     } else if (hoster === "datanodes") {
       const direct = await page.evaluate(async (pageUrl) => {
         const u = new URL(pageUrl);
@@ -178,7 +209,8 @@ export async function browserResolveHoster(
       const html = document.documentElement.innerHTML;
       const m =
         html.match(/https:\/\/(?:dl\.)?fuckingfast\.(?:co|com|io)\/dl\/[A-Za-z0-9._~-]+/i) ||
-        html.match(/https:\/\/[a-z0-9.-]*datanodes\.[a-z]+(?::\d+)?\/d\/[^\s"'<>\\]+/i);
+        html.match(/https:\/\/[a-z0-9.-]*datanodes\.[a-z]+(?::\d+)?\/d\/[^\s"'<>\\]+/i) ||
+        html.match(/https?:\/\/[a-z0-9.-]*fileskeep\.[a-z]+\/[^\s"'<>\\]*\.(?:rar|zip|7z|exe|iso|bin|mp4|mkv)[^\s"'<>\\]*/i);
       return m ? m[0] : null;
     }).catch(() => null);
 

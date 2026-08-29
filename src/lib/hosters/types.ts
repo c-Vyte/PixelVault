@@ -21,6 +21,8 @@ export type HosterId =
   | "buzzheavier"
   | "1fichier"
   | "mediafire"
+  | "mega"
+  | "fileskeep"
   | "megaup"
   | "sendcm"
   | "multiup"

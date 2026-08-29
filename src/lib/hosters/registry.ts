@@ -90,9 +90,25 @@ export const HOSTERS: Record<HosterId, HosterMeta> = {
     id: "mediafire",
     label: "MediaFire",
     hosts: /(^|\.)mediafire\.com$/i,
-    needsBrowser: false,
-    ipBound: false,
+    needsBrowser: false, // direct href is server-rendered on the file page
+    ipBound: false, // download*.mediafire.com URLs carry their own token
     priority: 45,
+  },
+  mega: {
+    id: "mega",
+    label: "MEGA",
+    hosts: /(^|\.)mega\.(nz|co\.nz|io)$/i,
+    needsBrowser: false, // files are client-side encrypted; we only verify alive
+    ipBound: false, // no direct URL is ever produced (decrypt happens in browser)
+    priority: 42,
+  },
+  fileskeep: {
+    id: "fileskeep",
+    label: "FilesKeep",
+    hosts: /(^|\.)fileskeep\.(com|net|org)$/i,
+    needsBrowser: true, // XFileSharing + Cloudflare + download countdown
+    ipBound: true,
+    priority: 38,
   },
   multiup: {
     id: "multiup",
@@ -132,7 +148,7 @@ export function identifyHoster(url: string): HosterMeta | null {
 
 /** Regex for any recognised file-host landing page (mirrors importParser but expanded). */
 export const FILE_HOSTER_URL_RE =
-  /(datanodes\.(to|cc|net)|fuckingfast\.(co|com|io)|pixeldrain\.(com|net|dev)|pixel\.drain|gofile\.(io|com)|buzzheavier\.com|bzzhr\.co|filekeeper\.(net|com)|krakenfiles\.com|1fichier\.com|send\.cm|megaup\.net|mediafire\.com|multiup\.(io|org|com)|filecrypt\.cc|keeplinks\.org|mirrorace\.com|ddownload\.com|rapidgator\.net|nitroflare\.com|uploadgig\.com|katfile\.com|hexupload\.net|clicknupload|racaty\.io|mixdrop\.co|doodstream\.com|filemoon\.sx|streamtape\.com|voe\.sx)/i;
+  /(datanodes\.(to|cc|net)|fuckingfast\.(co|com|io)|pixeldrain\.(com|net|dev)|pixel\.drain|gofile\.(io|com)|buzzheavier\.com|bzzhr\.co|filekeeper\.(net|com)|krakenfiles\.com|1fichier\.com|send\.cm|megaup\.net|mediafire\.com|mega\.(nz|co\.nz|io)|fileskeep\.com|multiup\.(io|org|com)|filecrypt\.cc|keeplinks\.org|mirrorace\.com|ddownload\.com|rapidgator\.net|nitroflare\.com|uploadgig\.com|katfile\.com|hexupload\.net|clicknupload|racaty\.io|mixdrop\.co|doodstream\.com|filemoon\.sx|streamtape\.com|voe\.sx)/i;
 
 export function isFileHosterUrl(url: string): boolean {
   return FILE_HOSTER_URL_RE.test(hostnameOf(url));

@@ -275,9 +275,11 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                 }
               }
 
-              const hostOrder = ["Datanodes", "PixelDrain", "FuckingFast", "FileKeeper", "Gofile", "KrakenFiles", "1Fichier", "Mega", "MediaFire"];
+              const hostOrder = ["Datanodes", "FuckingFast", "PixelDrain", "FileKeeper", "FilesKeep", "Gofile", "KrakenFiles", "1Fichier", "MediaFire", "Mega"];
               const sortedHosts = Object.keys(directGroups).sort((a, b) => {
-                const ia = hostOrder.indexOf(a); const ib = hostOrder.indexOf(b);
+                const norm = (h: string) => h.replace(/^Filehoster:\s*/i, "").trim().toLowerCase().replace(/\s+/g, "");
+                const ia = hostOrder.findIndex((h) => norm(h) === norm(a));
+                const ib = hostOrder.findIndex((h) => norm(h) === norm(b));
                 if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
                 return a.localeCompare(b);
               });
@@ -293,8 +295,8 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                     const isMultiPart = links.length > 1 || !!(links[0] as any)?.partTotal;
                     const hostLabel = host.toUpperCase();
                     const hostColor =
-                      /DATANODES|PIXELDRAIN/i.test(hostLabel) ? "text-white" :
-                      /FUCKINGFAST|GOFILE|MEGA/i.test(hostLabel) ? "text-amber-400" :
+                      /DATANODES|PIXELDRAIN|MEDIAFIRE/i.test(hostLabel) ? "text-white" :
+                      /FUCKINGFAST|GOFILE|MEGA|FILESKEEP/i.test(hostLabel) ? "text-amber-400" :
                       /1FICHIER|FILEKEEPER/i.test(hostLabel) ? "text-red-400" : "text-purple-400";
 
                     // Sort parts numerically

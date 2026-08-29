@@ -3,20 +3,25 @@ import { identifyHoster, isFileHosterUrl, isTorrentUrl, hostnameOf } from "./reg
 import { fuckingfastResolver } from "./resolvers/fuckingfast";
 import { datanodesResolver } from "./resolvers/datanodes";
 import { pixeldrainResolver, gofileResolver, krakenfilesResolver, makeGenericResolver } from "./resolvers/simpleHosts";
+import { mediafireResolver } from "./resolvers/mediafire";
+import { megaResolver } from "./resolvers/mega";
+import { fileskeepResolver } from "./resolvers/fileskeep";
 import { browserResolveHoster } from "./browserResolve";
 
 const RESOLVERS: HosterResolver[] = [
   datanodesResolver,
   fuckingfastResolver,
+  fileskeepResolver,
   pixeldrainResolver,
   gofileResolver,
   krakenfilesResolver,
+  mediafireResolver,
+  megaResolver,
   makeGenericResolver("filekeeper"),
   makeGenericResolver("buzzheavier"),
   makeGenericResolver("1fichier"),
   makeGenericResolver("sendcm"),
   makeGenericResolver("megaup"),
-  makeGenericResolver("mediafire"),
   makeGenericResolver("multiup"),
   makeGenericResolver("generic"),
 ];

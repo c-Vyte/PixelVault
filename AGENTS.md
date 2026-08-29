@@ -147,9 +147,20 @@ link really contains a file and extract the direct URL + real filename.
 - `resolvers/datanodes.ts` — XFileSharing-derived: POST `/download` with
   `op=download2, id=<fileCode>, method_free=…, dl=1` → JSON `{url}` or 302 to
   `rnodeN.datanodes.to:8443/d/<token>/<name>` (session/IP-scoped).
+- `resolvers/mediafire.ts` — GET the file page, read the server-rendered
+  `#downloadButton` / `a.popsok` href (or any `download*.mediafire.com/...` URL)
+  → direct link + filename; non-HTML responses are treated as instant downloads.
+- `resolvers/mega.ts` — MEGA files are client-side encrypted (AES key lives in
+  the URL fragment; direct URLs only exist in-browser), so it NEVER returns a
+  directUrl. It verifies a link is alive and reads size via the public
+  `g.api.mega.co.nz/cs` API (`[{a:"g",g:1,p:<id>}]` → `{s, at}` vs `{ea:-8}`
+  dead). Handles /file/, /folder/, /embed/ and legacy `/#!<id>!<key>` links.
+- `resolvers/fileskeep.ts` — FilesKeep (fileskeep.com), XFileSharing behind
+  Cloudflare: GET landing → POST `/` `op=download2, id=<code>` → 302/node URL;
+  browser fallback handles the countdown/captcha gate.
 - `resolvers/simpleHosts.ts` — pixeldrain (`/api/file/<id>`), gofile (guest
   token → `/api/contents/<code>`), krakenfiles (`/api/v1/file/<id>`), plus a
-  generic XFileSharing alive-check fallback for megaup/sendcm/mediafire/etc.
+  generic XFileSharing alive-check fallback for megaup/sendcm/etc.
 - `browserResolve.ts` — Playwright fallback for Cloudflare/Turnstile gates:
   fires the same HTMX/XFS POST *inside* a real page (same-origin cookies) and
   captures download events / popups / DOM dl URLs. Dynamically imports

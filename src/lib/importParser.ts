@@ -207,7 +207,7 @@ export function fileNameFromUrlHash(url: string): string {
 }
 
 const FILE_HOSTS =
-  /(mega\.nz|mediafire\.com|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org)/;
+  /(mega\.nz|mega\.co\.nz|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org)/;
 
 export function isDownloadHref(href: string, base: string): boolean {
   if (SKIP_HREF.test(href)) return false;
@@ -255,7 +255,12 @@ export function linkDisplayName(url: string): string {
     const host = u.hostname.replace(/^www\./, "");
     const known: Record<string, string> = {
       "mega.nz": "MEGA",
+      "mega.co.nz": "MEGA",
+      "mega.io": "MEGA",
       "www.mediafire.com": "MediaFire",
+      "mediafire.com": "MediaFire",
+      "fileskeep.com": "FilesKeep",
+      "www.fileskeep.com": "FilesKeep",
       "drive.google.com": "Google Drive",
       "store.steampowered.com": "Steam",
       "store.epicgames.com": "Epic Games",
@@ -389,13 +394,22 @@ export function extractNameFromPageTitle(title: string): string {
 function detectPart(url: string): { part?: number; partTotal?: number } {
   try {
     const u = new URL(url);
-    // FuckingFast-style links carry the filename in the fragment.
-    const hashName = fileNameFromUrlHash(url);
-    const filename = decodeURIComponent(hashName || u.pathname.split("/").pop() || u.hash || "");
-    const p1 = filename.match(/_?\.?part(\d+)/i);
+    // Only treat the fragment as a filename when it really is one — MEGA
+    // links put an encrypted base64 key in the fragment (#<id>!<key>) which
+    // can coincidentally contain "part1", so exclude those hosters.
+    const isMega = /mega\.(nz|co\.nz|io)$/i.test(u.hostname);
+    const hashName = isMega ? "" : fileNameFromUrlHash(url);
+    const filename = decodeURIComponent(hashName || u.pathname.split("/").pop() || "");
+    // A "part N" marker only counts when it sits in a filename that ends with
+    // an archive extension (avoids matching folder codes like /wp67code/).
+    const hasArchiveExt = /\.(rar|zip|7z|exe|iso|bin|part\d*|tar)(\.|$)/i.test(filename)
+      || /\.part\d+\s*$/i.test(filename)
+      || /\d{3}\s*$/i.test(filename);
+    const p1 = filename.match(/[._-]part(\d+)\s*(\.(?:rar|zip|7z))?\s*$/i)
+      || (hasArchiveExt ? filename.match(/[._-]part(\d+)/i) : null);
     if (p1) return { part: parseInt(p1[1], 10) };
     const p2 = filename.match(/\.(\d{3})(?:\.|$)/);
-    if (p2) return { part: parseInt(p2[1], 10) };
+    if (p2 && hasArchiveExt) return { part: parseInt(p2[1], 10) };
     const p3 = filename.match(/\.rar$/) && filename.match(/\.(r\d+)$/);
     if (p3) return { part: parseInt(p3[1].replace(/\D/g, ""), 10) };
   } catch {}
@@ -652,6 +666,9 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
       if (/buzzheavier|bzzhr/i.test(u)) return 90;
       if (/krakenfiles/i.test(u)) return 85;
       if (/1fichier\.com/i.test(u)) return 80;
+      if (/fileskeep/i.test(u)) return 75;
+      if (/mediafire\.com/i.test(u)) return 65;
+      if (/mega\.nz|mega\.co\.nz|mega\.io/i.test(u)) return 60;
       if (/^magnet:/i.test(u) || /\.torrent(\?|$)/i.test(u)) return 10;
       return 0;
     };
