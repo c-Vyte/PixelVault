@@ -180,7 +180,10 @@ export function stripSiteSuffix(title: string, sourceHost: string): string {
 export function absoluteUrl(base: string, href: string): string {
   try {
     const u = new URL(href, base);
-    u.hash = "";
+    // fuckingfast.co (and a few hosts) put the real filename in the fragment,
+    // e.g. /11i3cwkyd61j#Game.part1.rar — keep it so link naming/parts work.
+    const hashLooksLikeFile = /^#?.+\.(rar|zip|7z|exe|iso|bin|part|mp4|mkv|apk|dmg|tar|gz)(\b|$)/i.test(u.hash) || /part\d+/i.test(u.hash);
+    if (!hashLooksLikeFile) u.hash = "";
     u.search = "";
     return u.href;
   } catch {
@@ -188,8 +191,23 @@ export function absoluteUrl(base: string, href: string): string {
   }
 }
 
+/** Filename hint carried in a hoster URL fragment (fuckingfast style), if any. */
+export function fileNameFromUrlHash(url: string): string {
+  try {
+    const hash = new URL(url).hash.replace(/^#/, "");
+    if (!hash) return "";
+    const decoded = decodeURIComponent(hash);
+    if (/\.(rar|zip|7z|exe|iso|bin|part|mp4|mkv|apk|dmg)(\b|$)/i.test(decoded) || /part\d+/i.test(decoded)) {
+      return decoded;
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 const FILE_HOSTS =
-  /(mega\.nz|mediafire\.com|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.to|datanodes\.cc|datanodes\.net|fuckingfast\.co|fuckingfast\.com|fuckingfast\.io|filekeeper\.net|buzzheavier|gofile\.io|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net)/;
+  /(mega\.nz|mediafire\.com|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org)/;
 
 export function isDownloadHref(href: string, base: string): boolean {
   if (SKIP_HREF.test(href)) return false;
@@ -244,9 +262,14 @@ export function linkDisplayName(url: string): string {
       "www.gog.com": "GOG",
       "datanodes.to": "DataNodes",
       "datanodes.cc": "DataNodes",
+      "datanodes.net": "DataNodes",
       "fuckingfast.co": "FuckingFast",
       "fuckingfast.com": "FuckingFast",
+      "fuckingfast.io": "FuckingFast",
+      "dl.fuckingfast.co": "FuckingFast",
       "filekeeper.net": "FileKeeper",
+      "filekeeper.org": "FileKeeper",
+      "bzzhr.co": "BuzzHeavier",
       "pixeldrain.com": "PixelDrain",
       "pixeldrain.dev": "PixelDrain",
       "filefactory.com": "FileFactory",
@@ -366,7 +389,9 @@ export function extractNameFromPageTitle(title: string): string {
 function detectPart(url: string): { part?: number; partTotal?: number } {
   try {
     const u = new URL(url);
-    const filename = decodeURIComponent(u.pathname.split("/").pop() || u.hash || "");
+    // FuckingFast-style links carry the filename in the fragment.
+    const hashName = fileNameFromUrlHash(url);
+    const filename = decodeURIComponent(hashName || u.pathname.split("/").pop() || u.hash || "");
     const p1 = filename.match(/_?\.?part(\d+)/i);
     if (p1) return { part: parseInt(p1[1], 10) };
     const p2 = filename.match(/\.(\d{3})(?:\.|$)/);
@@ -551,7 +576,11 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
     seen.add(abs);
     const isUrlText = /^(https?:\/\/|magnet:)/i.test(text.trim());
     const anchorText = isUrlText ? "" : text;
-    const extractedFromUrl = extractNameFromUrl(abs);
+    // Hosts like fuckingfast put the real filename in the URL fragment;
+    // prefer that hint over generic path-segment extraction.
+    const extractedFromUrl = fileNameFromUrlHash(abs)
+      ? cleanFilename(fileNameFromUrlHash(abs))
+      : extractNameFromUrl(abs);
 
     // Smart name resolution: context > url extraction > anchor text > host display
     let name: string;
@@ -596,7 +625,7 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
   const isCf = /Just a moment|cf-chl|challenge-platform|cf_chl_opt|Checking your browser|Ray ID:/i.test(html);
   const isSteamRip = sourceHost.includes("steamrip");
   if ((isCf || isSteamRip) && links.length < 8) {
-    const PREFERRED = /gofile\.io|pixeldrain\.com|buzzheavier|bzzhr|1fichier\.com|send\.cm|krakenfiles|datanodes|fuckingfast/i;
+    const PREFERRED = /datanodes|fuckingfast|filekeeper|gofile\.io|pixeldrain\.com|buzzheavier|bzzhr|1fichier\.com|send\.cm|krakenfiles|multiup/i;
     for (const { href } of anchors) {
       if (!PREFERRED.test(href)) continue;
       const abs = absoluteUrl(base, href);
@@ -610,15 +639,20 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
     }
   }
 
-  // Prioritize preferred file hosters (gofile, BZZHR/pixeldrain) before other hosts and before Cloudflare fallback URLs
+  // Prioritize preferred file hosters before other hosts and before Cloudflare
+  // fallback URLs. Datanodes/FuckingFast are the fastest mirrors (per-source
+  // guidance) so they rank above the older gofile/pixeldrain preference.
   if (links.length > 1) {
     const score = (u: string) => {
+      if (/datanodes/i.test(u)) return 120;
+      if (/fuckingfast/i.test(u)) return 115;
+      if (/filekeeper/i.test(u)) return 110;
       if (/gofile\.io/i.test(u)) return 100;
-      if (/pixeldrain\.com|pixeldrain\.dev/i.test(u)) return 95;
+      if (/pixeldrain\.com|pixeldrain\.dev|pixel\.drain/i.test(u)) return 95;
       if (/buzzheavier|bzzhr/i.test(u)) return 90;
+      if (/krakenfiles/i.test(u)) return 85;
       if (/1fichier\.com/i.test(u)) return 80;
-      if (/datanodes|fuckingfast/i.test(u)) return 70;
-      if (/^magnet:/i.test(u)) return 10;
+      if (/^magnet:/i.test(u) || /\.torrent(\?|$)/i.test(u)) return 10;
       return 0;
     };
     links.sort((a, b) => score(b.url) - score(a.url));

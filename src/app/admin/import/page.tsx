@@ -27,12 +27,21 @@ interface ParsedEntry {
   url: string;
 }
 
+type LinkResolveState = "idle" | "checking" | "alive" | "direct" | "dead" | "blocked";
+
 interface ParsedLink {
   name: string;
   url: string;
   type: "official" | "repack" | "direct" | "cracked" | "torrent";
   part?: number;
   partTotal?: number;
+  /** Hoster link-resolution state (datanodes/fuckingfast/...). */
+  resolveState?: LinkResolveState;
+  /** Real filename reported by the hoster. */
+  resolveFileName?: string;
+  /** Resolved direct download URL (session-scoped, admin convenience only). */
+  directUrl?: string;
+  resolveLabel?: string;
 }
 
 interface DetailData {
@@ -145,6 +154,11 @@ export default function AdminImport() {
   const [sentencePrompt, setSentencePrompt] = useState<number[] | null>(null);
   const [noLinksPrompt, setNoLinksPrompt] = useState<{ indices: number[]; action: "import" | "skip" | null } | null>(null);
   const [nameSuggestionPrompt, setNameSuggestionPrompt] = useState<{ itemIndex: number; links: { index: number; currentName: string; suggestedName: string }[]; resolved: Set<number> } | null>(null);
+  // Shown when hoster links (datanodes/fuckingfast/...) are dead/missing but
+  // torrent/magnet mirrors exist — the admin picks accept vs skip.
+  const [torrentPrompt, setTorrentPrompt] = useState<{ indices: number[]; action: "accept" | "skip" | null } | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveProgress, setResolveProgress] = useState({ done: 0, total: 0 });
 
   const fetchList = async () => {
     setError("");
@@ -364,6 +378,140 @@ export default function AdminImport() {
     }
   };
 
+  /**
+   * Resolve file-hoster landing links (datanodes.to, fuckingfast.co, pixeldrain,
+   * gofile, ...) for the selected+detailed items. The resolver follows the
+   * hoster's download flow and reports per-link status: a green badge means a
+   * real file was found, red means the hoster link is dead. Dead-hoster items
+   * that only have torrents left trigger the torrent-accept prompt.
+   */
+  const resolveHosterLinks = async (itemIndices?: number[]) => {
+    const targets = (itemIndices && itemIndices.length > 0
+      ? itemIndices
+      : items.map((_, i) => i).filter((i) => selected.has(i)))
+      .filter((i) => items[i]?.detail && items[i].detail.links.some((l) => l.url && l.url.trim()));
+
+    if (targets.length === 0) return;
+
+    // Collect every http(s) link we can resolve.
+    type Ref = { item: number; link: number; url: string };
+    const refs: Ref[] = [];
+    for (const i of targets) {
+      items[i].detail!.links.forEach((l, li) => {
+        if (l.url && /^https?:\/\//i.test(l.url) && l.type !== "official") refs.push({ item: i, link: li, url: l.url.trim() });
+      });
+    }
+    if (refs.length === 0) return;
+
+    setResolving(true);
+    setError("");
+    setResolveProgress({ done: 0, total: refs.length });
+
+    // Mark all as checking
+    setItems((prev) => {
+      const copy = [...prev];
+      for (const r of refs) {
+        const links = copy[r.item].detail!.links;
+        if (links[r.link]) links[r.link] = { ...links[r.link], resolveState: "checking" };
+      }
+      return copy;
+    });
+
+    const BATCH = 15;
+    const stateByUrl = new Map<string, { state: LinkResolveState; directUrl?: string; fileName?: string; label?: string }>();
+
+    try {
+      for (let b = 0; b < refs.length; b += BATCH) {
+        const slice = refs.slice(b, b + BATCH);
+        let res: any;
+        try {
+          const r = await fetch("/api/resolve-links", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ urls: slice.map((s) => s.url) }),
+          });
+          res = await r.json();
+          if (!r.ok) throw new Error(res.error || `HTTP ${r.status}`);
+        } catch (err) {
+          // Network/API failure — mark unknown rather than dead so the admin
+          // isn't pushed toward torrents by a resolver outage.
+          for (const s of slice) stateByUrl.set(s.url, { state: "idle", label: err instanceof Error ? err.message : "resolve failed" });
+          setResolveProgress((p) => ({ done: p.done + slice.length, total: refs.length }));
+          continue;
+        }
+
+        for (const rr of res.results || []) {
+          // network/blocked → "blocked" (we couldn't tell; never call it dead),
+          // genuine 404/file-missing → "dead".
+          const state: LinkResolveState = rr.ok
+            ? "direct"
+            : rr.alive
+              ? "alive"
+              : rr.blocked || rr.network || rr.reason === "network"
+                ? "blocked"
+                : rr.reason === "torrent" || rr.reason === "not-a-hoster"
+                  ? "idle"
+                  : "dead";
+          stateByUrl.set(rr.inputUrl, {
+            state,
+            directUrl: rr.directUrl || undefined,
+            fileName: rr.fileName || undefined,
+            label: rr.label,
+          });
+        }
+        setResolveProgress((p) => ({ done: p.done + slice.length, total: refs.length }));
+      }
+
+      // Apply results back to items
+      setItems((prev) => {
+        const copy = [...prev];
+        for (const r of refs) {
+          const info = stateByUrl.get(r.url);
+          if (!info) continue;
+          const detail = copy[r.item].detail;
+          if (!detail) continue;
+          const links = [...detail.links];
+          const cur = links[r.link];
+          if (!cur) continue;
+          links[r.link] = {
+            ...cur,
+            resolveState: info.state,
+            directUrl: info.directUrl,
+            resolveLabel: info.label,
+            resolveFileName: info.fileName && isGenericLinkName(cur.name) ? info.fileName : cur.resolveFileName,
+          };
+          copy[r.item] = { ...copy[r.item], detail: { ...detail, links } };
+        }
+        return copy;
+      });
+
+      // After resolution: prompt for items whose hoster links are all dead but
+      // which still have a torrent/magnet mirror.
+      const torrentOnly: number[] = [];
+      for (const i of targets) {
+        const links = items[i].detail?.links || [];
+        // re-read from stateByUrl view
+        let hasLiveDirect = false;
+        let hasDeadDirect = false;
+        let hasTorrent = false;
+        for (const l of links) {
+          if (l.type === "torrent" || l.url.startsWith("magnet:")) { hasTorrent = true; continue; }
+          if (!/^https?:/i.test(l.url)) continue;
+          const info = stateByUrl.get(l.url.trim());
+          if (!info) { hasLiveDirect = true; continue; } // unchecked = assume present
+          if (info.state === "direct" || info.state === "alive" || info.state === "blocked" || info.state === "idle" || info.state === "checking") hasLiveDirect = true;
+          else if (info.state === "dead") hasDeadDirect = true;
+        }
+        if (!hasLiveDirect && hasDeadDirect && hasTorrent) torrentOnly.push(i);
+      }
+      if (torrentOnly.length > 0) {
+        setTorrentPrompt({ indices: torrentOnly, action: null });
+      }
+    } finally {
+      setResolving(false);
+    }
+  };
+
   const resolveNameSuggestion = (action: "use-suggested" | "keep-current" | "skip", linkIndices?: number[]) => {
     if (!nameSuggestionPrompt) return;
     
@@ -468,6 +616,27 @@ export default function AdminImport() {
         return;
       }
 
+      // Check for items whose file-hoster links are dead but a torrent/magnet
+      // mirror exists — ask the admin before importing torrent-only entries.
+      const torrentOnlyIndices = items
+        .map((it, i) => ({ it, i }))
+        .filter(({ i, it }) => {
+          if (!selected.has(i) || !it.detail) return false;
+          const links = it.detail.links.filter((l) => l.url && l.url.trim());
+          const torrents = links.filter((l) => l.type === "torrent" || l.url.startsWith("magnet:"));
+          const directs = links.filter((l) => l.type !== "torrent" && !l.url.startsWith("magnet:"));
+          if (torrents.length === 0) return false;
+          // Only prompt when every hoster/direct link has been confirmed dead.
+          const deadDirects = directs.filter((l) => (l as ParsedLink).resolveState === "dead");
+          return directs.length > 0 && deadDirects.length === directs.length;
+        })
+        .map(({ i }) => i);
+
+      if (torrentOnlyIndices.length > 0) {
+        setTorrentPrompt({ indices: torrentOnlyIndices, action: null });
+        return;
+      }
+
       performImport();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed");
@@ -482,6 +651,19 @@ export default function AdminImport() {
       setSelected(nextSelected);
     }
     setNoLinksPrompt(null);
+    performImport();
+  };
+
+  const confirmTorrentAction = (action: "accept" | "skip") => {
+    if (!torrentPrompt) return;
+    if (action === "skip") {
+      // Drop the torrent-only items entirely.
+      const nextSelected = new Set(selected);
+      torrentPrompt.indices.forEach(i => nextSelected.delete(i));
+      setSelected(nextSelected);
+    }
+    // "accept" keeps the selection as-is, so torrent links import normally.
+    setTorrentPrompt(null);
     performImport();
   };
 
@@ -511,13 +693,19 @@ export default function AdminImport() {
         const rawLinks = (it.detail?.links || []).filter((l) => l.url && l.url.trim());
         const links = (() => {
           const out: { name: string; url: string; type: "official" | "repack" | "direct" | "cracked" | "torrent"; parts?: number; partLinks?: { part: number; url: string }[] }[] = [];
-          const groups = new Map<string, { url: string; part: number; partTotal?: number; name: string; type: string }[]>();
+          const groups = new Map<string, { url: string; part: number; partTotal?: number; name: string; type: string; directUrl?: string; resolveState?: LinkResolveState }[]>();
+          const resolveFields = (l: ParsedLink) => ({
+            ...(l.directUrl ? { directUrl: l.directUrl } : {}),
+            ...(l.resolveState === "direct" || l.resolveState === "alive" || l.resolveState === "dead" || l.resolveState === "blocked"
+              ? { resolveState: l.resolveState as "direct" | "alive" | "dead" | "blocked", resolvedAt: new Date().toISOString() }
+              : {}),
+          });
           for (const l of rawLinks) {
             if (l.part) {
               const host = (() => { try { return new URL(l.url).hostname; } catch { return l.url; } })();
               const key = `${l.type || "direct"}|${host}`;
               const arr = groups.get(key) || [];
-              arr.push({ url: l.url, part: l.part, partTotal: l.partTotal, name: l.name || "Download", type: l.type || "direct" });
+              arr.push({ url: l.url, part: l.part, partTotal: l.partTotal, name: l.name || "Download", type: l.type || "direct", directUrl: l.directUrl, resolveState: l.resolveState });
               groups.set(key, arr);
             }
           }
@@ -530,6 +718,10 @@ export default function AdminImport() {
               type: (first.type as "official" | "repack" | "direct" | "cracked" | "torrent") || "direct",
               parts: first.partTotal || sorted.length,
               partLinks: sorted.map((s) => ({ part: s.part, url: s.url })),
+              ...(first.directUrl ? { directUrl: first.directUrl } : {}),
+              ...(first.resolveState === "direct" || first.resolveState === "alive" || first.resolveState === "dead" || first.resolveState === "blocked"
+                ? { resolveState: first.resolveState, resolvedAt: new Date().toISOString() }
+                : {}),
             });
           }
           for (const l of rawLinks) {
@@ -538,6 +730,7 @@ export default function AdminImport() {
               name: l.name || "Download",
               url: l.url,
               type: l.type || ("direct" as const),
+              ...resolveFields(l),
             });
           }
           return out;
@@ -657,6 +850,27 @@ export default function AdminImport() {
         .filter(({ it }) => (it.detail?.title || it.entry.title || "").toLowerCase().includes(nameFilter.toLowerCase()))
         .map(({ i }) => i)
     : [];
+
+  const renderResolveBadge = (link: ParsedLink) => {
+    if (link.type === "torrent" || link.url.startsWith("magnet:")) return null;
+    const st = link.resolveState;
+    if (!st || st === "idle") return null;
+    const map: Record<LinkResolveState, { text: string; cls: string; title?: string }> = {
+      checking: { text: "⏳ verifying", cls: "bg-blue-900/60 text-blue-200", title: "Contacting the file hoster…" },
+      direct: { text: "⚡ direct link found", cls: "bg-emerald-900/70 text-emerald-200", title: link.directUrl ? `Direct: ${link.directUrl}` : "Hoster returned a real download URL" },
+      alive: { text: "✓ file exists", cls: "bg-teal-900/60 text-teal-200", title: "Landing page reachable and references the file" },
+      dead: { text: "✗ dead", cls: "bg-red-900/70 text-red-200", title: "The hoster reports this file is missing/expired" },
+      blocked: { text: "⛨ captcha/unreachable", cls: "bg-amber-900/60 text-amber-200", title: "Cloudflare/Turnstile gate or the hoster couldn't be reached — link is NOT confirmed dead" },
+      idle: { text: "", cls: "" },
+    };
+    const m = map[st];
+    if (!m.text) return null;
+    return (
+      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap ${m.cls}`} title={m.title}>
+        {m.text}
+      </span>
+    );
+  };
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -831,23 +1045,40 @@ export default function AdminImport() {
 
       {items.some((it) => it.detail || it.error || it.loading) && (
         <div className="bg-[#111827] rounded-xl p-6 border border-blue-900/30 mb-6">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
             <h2 className="text-lg font-semibold text-white">3 · Download links</h2>
-            <div className="flex rounded-lg overflow-hidden border border-blue-900/50">
+            <div className="flex items-center gap-3 flex-wrap">
               <button
-                onClick={() => setViewMode("flat")}
-                className={`px-3 py-1.5 text-xs font-semibold ${viewMode === "flat" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
+                onClick={() => resolveHosterLinks()}
+                disabled={resolving || loadingDetails || selectedCount === 0}
+                title="Follows each hoster link (datanodes.to, fuckingfast.co, pixeldrain, gofile, …) to confirm the file exists and extract the real direct URL"
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Flat
+                {resolving ? `Verifying hosters… ${resolveProgress.done}/${resolveProgress.total}` : "⚡ Verify hoster links"}
               </button>
-              <button
-                onClick={() => setViewMode("grouped")}
-                className={`px-3 py-1.5 text-xs font-semibold ${viewMode === "grouped" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
-              >
-                Grouped by host
-              </button>
+              <div className="flex rounded-lg overflow-hidden border border-blue-900/50">
+                <button
+                  onClick={() => setViewMode("flat")}
+                  className={`px-3 py-1.5 text-xs font-semibold ${viewMode === "flat" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
+                >
+                  Flat
+                </button>
+                <button
+                  onClick={() => setViewMode("grouped")}
+                  className={`px-3 py-1.5 text-xs font-semibold ${viewMode === "grouped" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
+                >
+                  Grouped by host
+                </button>
+              </div>
             </div>
           </div>
+          {resolving && (
+            <div className="mb-4">
+              <div className="w-full bg-blue-900/30 rounded-full h-1.5">
+                <div className="bg-cyan-500 h-1.5 rounded-full transition-all" style={{ width: `${resolveProgress.total ? (resolveProgress.done / resolveProgress.total) * 100 : 0}%` }} />
+              </div>
+            </div>
+          )}
 
           {viewMode === "grouped" ? (
             <div className="space-y-4">
@@ -886,6 +1117,7 @@ export default function AdminImport() {
                             onChange={(e) => updateLinkField(g.itemIndex, linkIndex, "url", e.target.value)}
                             className="flex-1 bg-[#0a0f1a] border border-blue-900/50 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500"
                           />
+                          {renderResolveBadge(link)}
                           <button onClick={() => removeLink(g.itemIndex, linkIndex)} className="text-red-400 hover:text-red-300 data-xs px-2">✕</button>
                         </div>
                       ))}
@@ -911,8 +1143,39 @@ export default function AdminImport() {
                         <p className="text-white font-semibold">{detail.title || it.entry.title}</p>
                         <p className="text-blue-300/40 data-xs break-all">{it.entry.url}</p>
                       </div>
-                      <span className="text-blue-300/50 data-xs whitespace-nowrap">{detail.links.length} link{detail.links.length === 1 ? "" : "s"}</span>
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                        {(() => {
+                          const hosts = detail.links.filter((l) => l.type !== "torrent" && !l.url.startsWith("magnet:"));
+                          const direct = hosts.filter((l) => l.resolveState === "direct").length;
+                          const alive = hosts.filter((l) => l.resolveState === "alive").length;
+                          const dead = hosts.filter((l) => l.resolveState === "dead").length;
+                          const blocked = hosts.filter((l) => l.resolveState === "blocked").length;
+                          const checked = direct + alive + dead + blocked;
+                          if (checked === 0) return <span className="text-blue-300/50 data-xs whitespace-nowrap">{detail.links.length} link{detail.links.length === 1 ? "" : "s"}</span>;
+                          return (
+                            <span className="flex items-center gap-1.5 data-xs whitespace-nowrap">
+                              {direct > 0 && <span className="px-2 py-0.5 rounded bg-emerald-900/70 text-emerald-200 font-semibold">⚡ {direct} direct</span>}
+                              {alive > 0 && <span className="px-2 py-0.5 rounded bg-teal-900/60 text-teal-200 font-semibold">✓ {alive} alive</span>}
+                              {dead > 0 && <span className="px-2 py-0.5 rounded bg-red-900/70 text-red-200 font-semibold">✗ {dead} dead</span>}
+                              {blocked > 0 && <span className="px-2 py-0.5 rounded bg-amber-900/60 text-amber-200 font-semibold">⛨ {blocked}?</span>}
+                            </span>
+                          );
+                        })()}
+                      </div>
                     </div>
+                    {(() => {
+                      const hosts = detail.links.filter((l) => l.type !== "torrent" && !l.url.startsWith("magnet:"));
+                      const allDead = hosts.length > 0 && hosts.every((l) => l.resolveState === "dead");
+                      const hasTorrent = detail.links.some((l) => l.type === "torrent" || l.url.startsWith("magnet:"));
+                      if (allDead && hasTorrent) {
+                        return (
+                          <div className="mb-3 px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-200 data-xs">
+                            🧲 All file-hoster links are dead — only the torrent mirror is usable for this entry. You&apos;ll be asked to accept or skip torrents on import.
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                     <div className="flex items-center gap-2 mb-3">
                       <label className="text-blue-300/50 data-xs whitespace-nowrap">Password</label>
                       <input
@@ -946,6 +1209,7 @@ export default function AdminImport() {
                             onChange={(e) => updateLinkField(i, li, "url", e.target.value)}
                             className="flex-1 bg-[#0a0f1a] border border-blue-900/50 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500"
                           />
+                          {renderResolveBadge(link)}
                           <button onClick={() => removeLink(i, li)} className="text-red-400 hover:text-red-300 data-xs px-2">✕</button>
                         </div>
                       ))}
@@ -1082,6 +1346,53 @@ export default function AdminImport() {
             </div>
             <button
               onClick={() => setNoLinksPrompt(null)}
+              className="mt-3 w-full text-center text-blue-300/60 hover:text-blue-300 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Torrent fallback prompt — hoster links dead, but torrents exist */}
+      {torrentPrompt && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-zxl z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111827] rounded-2xl border border-amber-700/40 p-8 max-w-md w-full mx-4">
+            <h2 className="text-xl font-bold text-white mb-3">No working file-hoster links — use torrents?</h2>
+            <p className="text-gray-300 text-sm mb-4">
+              The direct hoster links (DataNodes, FuckingFast, PixelDrain, GoFile…) for{" "}
+              <strong className="text-amber-300">{torrentPrompt.indices.length}</strong>{" "}
+              {torrentPrompt.indices.length === 1 ? "entry" : "entries"} could not be reached or were reported dead.
+              Each entry still has a <strong className="text-cyan-300">torrent / magnet</strong> mirror available.
+            </p>
+            <div className="max-h-40 overflow-y-auto border border-blue-900/30 rounded-lg divide-y divide-blue-900/20 mb-5">
+              {torrentPrompt.indices.map((idx) => (
+                <div key={idx} className="px-3 py-2 text-sm text-gray-300 flex items-center gap-2">
+                  <span className="text-cyan-400">🧲</span>
+                  {items[idx]?.detail?.title || items[idx]?.entry.title}
+                </div>
+              ))}
+            </div>
+            <p className="text-blue-300/60 text-xs mb-5">
+              Torrents need a BitTorrent client (qBittorrent, etc.). Accept to import them as torrent-only entries,
+              or skip these entries and keep looking for direct mirrors.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => confirmTorrentAction("skip")}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-red-700 text-white font-semibold hover:bg-red-600"
+              >
+                Skip these ({torrentPrompt.indices.length})
+              </button>
+              <button
+                onClick={() => confirmTorrentAction("accept")}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-cyan-700 text-white font-semibold hover:bg-cyan-600"
+              >
+                Accept torrents
+              </button>
+            </div>
+            <button
+              onClick={() => setTorrentPrompt(null)}
               className="mt-3 w-full text-center text-blue-300/60 hover:text-blue-300 text-sm"
             >
               Cancel

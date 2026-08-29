@@ -132,11 +132,55 @@ interface Software {
 - `HEAD → GET` fallback for services that reject HEAD
 - 10 second timeout per request
 
+### `src/lib/hosters/` — File-hoster link resolution (NEW)
+File hosters hand out *landing page* URLs that contain the real file behind a
+button/form/JS flow. This module follows that flow so the importer can verify a
+link really contains a file and extract the direct URL + real filename.
+- `registry.ts` — `HOSTERS` metadata (host regex, priority, `needsBrowser`,
+  `ipBound`), `identifyHoster()`, `isFileHosterUrl()`, `isTorrentUrl()`.
+  Priority order: datanodes(100) > fuckingfast(95) > pixeldrain(90) > gofile(85)
+  > buzzheavier(80) > filekeeper(75) > krakenfiles(70) > 1fichier(60) …
+- `resolvers/fuckingfast.ts` — GET landing → legacy `window.open(".../dl/…")`
+  JS regex OR HTMX flow: POST `/f/<id>/go` with `HX-Request: true`, read
+  `hx-redirect`/`location` header → `dl.fuckingfast.co/dl/<token>`. Filename
+  comes from the URL fragment (`/<id>#Game.part1.rar`).
+- `resolvers/datanodes.ts` — XFileSharing-derived: POST `/download` with
+  `op=download2, id=<fileCode>, method_free=…, dl=1` → JSON `{url}` or 302 to
+  `rnodeN.datanodes.to:8443/d/<token>/<name>` (session/IP-scoped).
+- `resolvers/simpleHosts.ts` — pixeldrain (`/api/file/<id>`), gofile (guest
+  token → `/api/contents/<code>`), krakenfiles (`/api/v1/file/<id>`), plus a
+  generic XFileSharing alive-check fallback for megaup/sendcm/mediafire/etc.
+- `browserResolve.ts` — Playwright fallback for Cloudflare/Turnstile gates:
+  fires the same HTMX/XFS POST *inside* a real page (same-origin cookies) and
+  captures download events / popups / DOM dl URLs. Dynamically imports
+  BrowserPool so it never loads in edge/serverless runtimes.
+- `hosterHttp.ts` — raw HTTP client: manual-redirect POST, CookieJar, form
+  bodies, hoster browser headers.
+- `index.ts` — `resolveHosterLink(url, opts)` (HTTP → browser fallback),
+  `resolveHosterLinks(urls, {concurrency})` batch, `classifyResolvedLinks()`
+  (hasDirect / hasTorrent / deadHosterUrls). **Network/CF failures are reported
+  as `blocked`/`reason:"network"`, never as "dead"** — an outage must not push
+  the admin toward torrents.
+- API: `POST /api/resolve-links` `{urls, httpOnly?}` → per-link
+  `{ok, alive, blocked, network, directUrl, fileName, via, reason}` (max 60/batch).
+
+### Torrent fallback prompt
+When an item's file-hoster links are confirmed dead but it still has a
+torrent/magnet mirror, the importer prompts **"No working file-hoster links —
+use torrents?"** (Accept torrents / Skip). Implemented in
+`admin/import/page.tsx` (`torrentPrompt`, `confirmTorrentAction`) and
+`admin/external-data/page.tsx` (`torrentGate`, `isTorrentOnly`). Resolved
+status persists per-link as `resolveState` / `directUrl` / `resolvedAt`.
+
 ### `src/lib/importParser.ts`
 - `isGenericLinkName(name)` — rejects "Download", "Download 1", etc.
 - `extractContextName(container)` — extracts names from headings, tables, lists
 - `extractNameFromUrl(url)` — parses from filename, path, query params
-- `FILE_HOSTS` map for automatic name detection from URLs
+- `fileNameFromUrlHash(url)` — filename from hoster fragment (fuckingfast style)
+- `absoluteUrl()` now KEEPS the URL fragment when it looks like a filename
+- `FILE_HOSTS` regex + `linkDisplayName()` map for automatic hoster naming
+- Link sort priority: datanodes > fuckingfast > filekeeper > gofile > pixeldrain
+  > buzzheavier > krakenfiles > 1fichier > torrents last
 
 ### `src/lib/BrowserPool.ts`
 - Event-driven Promise wait queue (replaced polling `setInterval(100ms)`)

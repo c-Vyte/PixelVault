@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { getSoftwareList, saveSoftwareList, type Software } from "@/lib/data";
 import { useToast } from "@/components/admin/Toast";
 
@@ -262,6 +262,26 @@ export default function ExternalDataPage() {
   const [detailItem, setDetailItem] = useState<any | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [aiEnhancing, setAiEnhancing] = useState(false);
+  // Pending bulk import whose selection contains torrent-only entries.
+  const [torrentGate, setTorrentGate] = useState<{ count: number; selection: Set<number> } | null>(null);
+  // Cache of full records keyed by title, so the torrent gate can inspect links.
+  const fullDataCache = useRef(new Map<string, any>());
+
+  /** True when an item's only download links are torrents/magnets. */
+  function isTorrentOnly(item: any): boolean {
+    const links: any[] = Array.isArray(item?.downloads)
+      ? item.downloads
+      : Array.isArray(item?.downloads_links)
+        ? item.downloads_links
+        : Array.isArray(item?.downloadLinks)
+          ? item.downloadLinks
+          : [];
+    const usable = links.filter((l) => l && typeof l.url === "string" && l.url.trim());
+    if (usable.length === 0) return false;
+    const hasDirect = usable.some((l) => l.type !== "torrent" && !l.url.startsWith("magnet:"));
+    const hasTorrent = usable.some((l) => l.type === "torrent" || l.url.startsWith("magnet:"));
+    return !hasDirect && hasTorrent;
+  }
   const PER_PAGE = 50;
 
   async function openDetail(item: IndexItem) {
@@ -404,10 +424,39 @@ export default function ExternalDataPage() {
     await doImportWithSelection(selected);
   }
 
-  async function doImportWithSelection(selection: Set<number>) {
+  async function doImportWithSelection(selection: Set<number>, skipTorrentGate = false) {
     if (selection.size === 0) {
       toast("No items selected. Click items to select them first.", "error");
       return;
+    }
+
+    // Torrent gate: warn when the selection includes entries whose only links
+    // are torrents/magnets (no datanodes/fuckingfast/etc. file-hoster links).
+    if (!skipTorrentGate) {
+      // FitGirl/ElAmigos ship a single small full-data file; load it so the
+      // gate can see links. XZY is chunked/heavy — skip the gate there (its
+      // entries are indexed and rarely torrent-only).
+      const gateSource = activeTab;
+      if (gateSource !== "xzy" && fullDataCache.current.size === 0) {
+        try {
+          const url = gateSource === "elamigos" ? "/data/elamigos-games.json" : "/data/fitgirl-games.json";
+          const full = await fetch(url).then((r) => r.json()).catch(() => [] as any[]);
+          for (const it of full as any[]) {
+            if (it?.title) fullDataCache.current.set(it.title, it);
+          }
+        } catch { /* non-fatal: skip gate when data can't be read */ }
+      }
+      const torrentOnlyTitles: string[] = [];
+      for (const idx of selection) {
+        const item = filtered[idx];
+        if (!item) continue;
+        const full = fullDataCache.current.get(item.title) || item;
+        if (isTorrentOnly(full)) torrentOnlyTitles.push(item.title);
+      }
+      if (torrentOnlyTitles.length > 0) {
+        setTorrentGate({ count: torrentOnlyTitles.length, selection });
+        return;
+      }
     }
 
     setImporting(true);
@@ -821,6 +870,42 @@ export default function ExternalDataPage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Torrent gate — confirm before importing torrent-only entries */}
+      {torrentGate && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111827] rounded-2xl border border-cyan-700/40 p-8 max-w-md w-full">
+            <h2 className="text-xl font-bold text-white mb-3">🧲 Torrent-only entries</h2>
+            <p className="text-gray-300 text-sm mb-4">
+              <strong className="text-cyan-300">{torrentGate.count}</strong>{" "}
+              {torrentGate.count === 1 ? "entry has" : "entries have"} no working file-hoster links
+              (DataNodes, FuckingFast, PixelDrain, GoFile…) — only a torrent/magnet mirror is available.
+            </p>
+            <p className="text-blue-300/60 text-xs mb-5">
+              Torrents require a BitTorrent client. Accept to import them as torrent downloads,
+              or cancel to revisit and pick direct-mirror entries instead.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setTorrentGate(null)}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-red-700 text-white font-semibold hover:bg-red-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const sel = torrentGate.selection;
+                  setTorrentGate(null);
+                  doImportWithSelection(sel, true);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-cyan-700 text-white font-semibold hover:bg-cyan-600"
+              >
+                Import with torrents
+              </button>
+            </div>
           </div>
         </div>
       )}

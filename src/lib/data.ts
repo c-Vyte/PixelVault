@@ -25,6 +25,11 @@ export interface Software {
     lastChecked?: string;
     archivedTitle?: string;
     archivedDescription?: string;
+    /** Resolved direct download URL from the file hoster (session-scoped). */
+    directUrl?: string;
+    /** Hoster resolution verdict: direct link found, alive, dead, blocked. */
+    resolveState?: "direct" | "alive" | "dead" | "blocked";
+    resolvedAt?: string;
   }[];
   downloadsByHoster?: Record<string, { name: string; url: string; type: string; hoster?: string; part?: number; partTotal?: number }[]>;
   password?: string;
