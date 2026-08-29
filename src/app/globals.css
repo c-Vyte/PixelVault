@@ -49,6 +49,36 @@ body {
   background-attachment: fixed;
 }
 
+/* ---------- Admin console: compact "minute" monospace ---------- */
+.admin-console {
+  /* A minute = small. Use a tiny, dense monospace so the data-heavy admin
+     tables/forms pack more in; the system mono stack always renders even when
+     the Google-hosted Geist Mono is unreachable. */
+  --admin-mono:
+    var(--font-geist-mono, ui-monospace), ui-monospace, SFMono-Regular,
+    "SF Mono", Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.78rem; /* ~12.5px base — noticeably smaller than the public site */
+  font-family: var(--admin-mono);
+  line-height: 1.45;
+}
+
+/* Force every admin element (incl. inputs/selects/buttons, which otherwise use
+   the UA font) onto the mono family without flattening Tailwind text sizes. */
+.admin-console *,
+.admin-console *::before,
+.admin-console *::after {
+  font-family: var(--admin-mono);
+}
+
+/* Keep a readable hierarchy while staying minute. */
+.admin-console h1 { font-size: 1.1rem; letter-spacing: 0.02em; }
+.admin-console h2 { font-size: 0.95rem; }
+.admin-console h3 { font-size: 0.85rem; }
+.admin-console input,
+.admin-console select,
+.admin-console textarea,
+.admin-console button { font-size: 0.78rem; letter-spacing: 0; }
+
 :root {
   --glow-1: rgba(124, 58, 237, 0.22);
   --glow-2: rgba(244, 63, 94, 0.1);
