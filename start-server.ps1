@@ -1,0 +1,1 @@
+& "C:\fileshare\node.exe" "C:\fileshare\node_modules\next\dist\bin\next" start -p 3000 > "C:\fileshare\server.log" 2> "C:\fileshare\server.err.log"
