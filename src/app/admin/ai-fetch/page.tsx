@@ -14,6 +14,8 @@ interface AiMeta {
   platform?: string;
   version?: string;
   size?: string;
+  banner?: string;
+  bannerProvider?: string;
 }
 
 interface ResultItem {
@@ -37,6 +39,8 @@ export default function AiFetchPage() {
   const [results, setResults] = useState<ResultItem[]>([]);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savedTitles, setSavedTitles] = useState<Set<string>>(new Set());
+  const [bannerFor, setBannerFor] = useState<string | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
 
   const generate = async () => {
     const titles = input
@@ -79,6 +83,95 @@ export default function AiFetchPage() {
     );
   };
 
+  const fetchBannerFor = async (idx: number) => {
+    const item = results[idx];
+    if (!item?.meta) return;
+    const t = (item.meta.title || item.title).trim();
+    setBannerFor(item.title);
+    try {
+      const r = await fetch("/api/ai/fetch-banner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: t }),
+      });
+      const d = await r.json();
+      if (r.ok && d.banner) {
+        updateMeta(idx, { banner: d.banner, bannerProvider: d.provider });
+        toast(`Banner found via ${d.provider}${d.matchedTitle ? ` (matched "${d.matchedTitle}")` : ""}.`, "success");
+      } else {
+        toast(d.error || "No banner found for this title.", "error");
+      }
+    } catch {
+      toast("Banner fetch failed.", "error");
+    } finally {
+      setBannerFor(null);
+    }
+  };
+
+  const buildEntry = (item: ResultItem): Software | null => {
+    if (!item.meta) return null;
+    const finalTitle = item.meta.title?.trim() || item.title;
+    const now = new Date().toISOString().split("T")[0];
+    const banner = item.meta.banner || "";
+    const placeholder = (w: number, h: number, bg: string) =>
+      `https://placehold.co/${w}x${h}/${bg}/ffffff?text=${encodeURIComponent(finalTitle.slice(0, 20))}`;
+    const tags = (Array.isArray(item.meta.tags) ? item.meta.tags : []).map((t) => `Tag: ${t}`);
+    const features = Array.isArray(item.meta.features) ? item.meta.features : [];
+    return {
+      id: makeId(finalTitle),
+      title: finalTitle,
+      description: item.meta.description || "",
+      category: CATEGORY_IDS.includes(item.meta.category || "") ? item.meta.category! : "pc-games",
+      subcategory: item.meta.tags?.[0] || "",
+      platform: (PLATFORMS.includes(item.meta.platform || "") ? item.meta.platform : "windows") as Software["platform"],
+      version: item.meta.version || "",
+      size: item.meta.size || "",
+      downloads: 0,
+      rating: 4,
+      icon: banner || placeholder(616, 352, "7c3aed"),
+      poster: banner || placeholder(600, 900, "4c1d95"),
+      screenshots: banner ? [banner] : [],
+      downloadLinks: [{ name: "Download", url: "", type: "official" }],
+      features: [...features, ...tags],
+      systemRequirements: "",
+      createdAt: now,
+      updatedAt: now,
+    };
+  };
+
+  const saveAll = async () => {
+    const saveable = results.filter((r) => r.meta && r.meta.found !== false && !savedTitles.has(r.title));
+    if (saveable.length === 0) return;
+    setSavingAll(true);
+    let okCount = 0;
+    for (const item of saveable) {
+      if (!item.meta?.banner && item.meta) {
+        try {
+          const t = (item.meta.title || item.title).trim();
+          const r = await fetch("/api/ai/fetch-banner", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: t }),
+          });
+          const d = await r.json();
+          if (r.ok && d.banner) item.meta.banner = d.banner;
+        } catch { /* leave placeholder */ }
+      }
+      const entry = buildEntry(item);
+      if (!entry) continue;
+      const existing = await getSoftwareList();
+      if (existing.some((s) => s.title.toLowerCase().trim() === entry.title.toLowerCase())) continue;
+      const saved = await saveSoftwareList([...existing, entry]);
+      if (saved) {
+        okCount++;
+        setSavedTitles((prev) => new Set(prev).add(item.title));
+      }
+    }
+    window.dispatchEvent(new Event("software-data-changed"));
+    toast(`Saved ${okCount} entries to library.`, "success");
+    setSavingAll(false);
+  };
+
   const saveOne = async (item: ResultItem) => {
     if (!item.meta) return;
     setSavingId(item.title);
@@ -89,44 +182,26 @@ export default function AiFetchPage() {
         toast(`"${finalTitle}" already exists in the library.`, "error");
         return;
       }
-      const now = new Date().toISOString().split("T")[0];
+      // Best-effort: grab a real banner from the internet if not already fetched.
+      if (!item.meta.banner) {
+        try {
+          const r = await fetch("/api/ai/fetch-banner", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: finalTitle }),
+          });
+          if (r.ok) {
+            const d = await r.json();
+            if (d.banner) {
+              item.meta.banner = d.banner;
+              item.meta.bannerProvider = d.provider;
+            }
+          }
+        } catch { /* keep placeholder */ }
+      }
 
-      // Best-effort: grab a real banner from the internet for the AI entry.
-      let banner = "";
-      try {
-        const r = await fetch("/api/ai/fetch-banner", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: finalTitle }),
-        });
-        if (r.ok) {
-          const d = await r.json();
-          if (d.banner) banner = d.banner;
-        }
-      } catch { /* keep placeholder */ }
-
-      const placeholder = (w: number, h: number, bg: string) =>
-        `https://placehold.co/${w}x${h}/${bg}/ffffff?text=${encodeURIComponent(finalTitle.slice(0, 20))}`;
-      const entry: Software = {
-        id: makeId(finalTitle),
-        title: finalTitle,
-        description: item.meta.description || "",
-        category: item.meta.category && CATEGORY_IDS.includes(item.meta.category) ? item.meta.category : "pc-games",
-        subcategory: "",
-        platform: (PLATFORMS.includes(item.meta.platform || "") ? item.meta.platform : "windows") as Software["platform"],
-        version: item.meta.version || "",
-        size: item.meta.size || "",
-        downloads: 0,
-        rating: 4,
-        icon: banner || placeholder(616, 352, "7c3aed"),
-        poster: banner || placeholder(600, 900, "4c1d95"),
-        screenshots: banner ? [banner] : [],
-        downloadLinks: [{ name: "Download", url: "", type: "official" }],
-        features: Array.isArray(item.meta.features) ? item.meta.features : [],
-        systemRequirements: "",
-        createdAt: now,
-        updatedAt: now,
-      };
+      const entry = buildEntry({ ...item, meta: item.meta });
+      if (!entry) return;
       const saved = await saveSoftwareList([...existing, entry]);
       if (!saved) {
         toast(`Saved "${finalTitle}" locally but storage may be full - data may not persist.`, "error");
@@ -145,8 +220,8 @@ export default function AiFetchPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white mb-1">AI Fetch</h1>
         <p className="text-blue-300/50 text-sm">
-          Generate metadata for games &amp; software using free LLM providers (Groq → Gemini → Mistral → Z.ai fallback).
-          Enter one title per line, up to 20.
+          Generate metadata for games &amp; software via AI providers — Grok (xAI) → Groq → Gemini → Mistral → Z.ai fallback.
+          Enter one title per line, up to 20; banners are fetched automatically on save.
         </p>
       </div>
 
@@ -158,21 +233,36 @@ export default function AiFetchPage() {
           placeholder={"Elden Ring\nBlender\nGTA V"}
           className="w-full bg-[#0b1120] border border-blue-900/40 rounded-lg p-3 text-sm text-white placeholder-blue-300/30 focus:outline-none focus:border-indigo-500 resize-y font-mono"
         />
-        <div className="flex items-center justify-between mt-3">
+        <div className="flex items-center justify-between mt-3 gap-3 flex-wrap">
           <span className="text-blue-300/40 text-xs">
             {input.split("\n").filter((t) => t.trim()).length}/20 titles
           </span>
-          <button
-            onClick={generate}
-            disabled={loading}
-            className={`px-5 py-2 rounded-lg text-sm font-bold transition-colors ${
-              loading
-                ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                : "bg-indigo-600 hover:bg-indigo-500 text-white"
-            }`}
-          >
-            {loading ? "Generating..." : "Generate with AI"}
-          </button>
+          <div className="flex items-center gap-2">
+            {results.length > 0 && (
+              <button
+                onClick={saveAll}
+                disabled={savingAll}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${
+                  savingAll
+                    ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+                    : "bg-emerald-700 hover:bg-emerald-600 text-white"
+                }`}
+              >
+                {savingAll ? "Saving all…" : "Save all (with banners)"}
+              </button>
+            )}
+            <button
+              onClick={generate}
+              disabled={loading}
+              className={`px-5 py-2 rounded-lg text-sm font-bold transition-colors ${
+                loading
+                  ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+                  : "bg-indigo-600 hover:bg-indigo-500 text-white"
+              }`}
+            >
+              {loading ? "Generating..." : "Generate with AI"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -201,30 +291,62 @@ export default function AiFetchPage() {
             ) : (
               <>
                 <div className="flex items-start justify-between gap-4 mb-4">
-                  <div className="min-w-0">
-                    <input
-                      value={item.meta.title || ""}
-                      onChange={(e) => updateMeta(idx, { title: e.target.value })}
-                      className="bg-transparent text-white font-bold text-lg w-full border-b border-transparent hover:border-blue-800 focus:border-indigo-500 focus:outline-none"
-                    />
-                    <p className="text-blue-300/40 text-xs mt-1">
-                      via {item.provider}
-                      {savedTitles.has(item.title) && <span className="text-emerald-400 ml-2">✓ saved</span>}
-                    </p>
+                  <div className="flex items-center gap-3 min-w-0">
+                    {item.meta.banner ? (
+                      <img
+                        src={item.meta.banner}
+                        alt=""
+                        className="w-24 h-12 object-cover rounded border border-blue-900/40 shrink-0"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                    ) : (
+                      <div className="w-24 h-12 rounded border border-dashed border-blue-900/50 flex items-center justify-center shrink-0">
+                        <button
+                          onClick={() => fetchBannerFor(idx)}
+                          disabled={bannerFor === item.title}
+                          className="text-blue-300/60 hover:text-indigo-300 text-[10px] px-1"
+                        >
+                          {bannerFor === item.title ? "…" : "🖼 banner"}
+                        </button>
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <input
+                        value={item.meta.title || ""}
+                        onChange={(e) => updateMeta(idx, { title: e.target.value })}
+                        className="bg-transparent text-white font-bold text-lg w-full border-b border-transparent hover:border-blue-800 focus:border-indigo-500 focus:outline-none"
+                      />
+                      <p className="text-blue-300/40 text-xs mt-1">
+                        via {item.provider}
+                        {item.meta.bannerProvider && <span className="text-indigo-300/60"> · img: {item.meta.bannerProvider}</span>}
+                        {savedTitles.has(item.title) && <span className="text-emerald-400 ml-2">✓ saved</span>}
+                      </p>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => saveOne(item)}
-                    disabled={savingId === item.title || savedTitles.has(item.title)}
-                    className={`shrink-0 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
-                      savedTitles.has(item.title)
-                        ? "bg-emerald-900/40 text-emerald-400 cursor-default"
-                        : savingId === item.title
-                        ? "bg-gray-700 text-gray-400"
-                        : "bg-emerald-600 hover:bg-emerald-500 text-white"
-                    }`}
-                  >
-                    {savedTitles.has(item.title) ? "Saved" : savingId === item.title ? "Saving..." : "Save to Library"}
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {item.meta.banner && (
+                      <button
+                        onClick={() => fetchBannerFor(idx)}
+                        disabled={bannerFor === item.title}
+                        className="px-3 py-2 rounded-lg text-xs font-bold bg-[#0b1120] border border-blue-900/40 text-blue-300 hover:text-white"
+                      >
+                        {bannerFor === item.title ? "…" : "↻"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => saveOne(item)}
+                      disabled={savingId === item.title || savedTitles.has(item.title)}
+                      className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
+                        savedTitles.has(item.title)
+                          ? "bg-emerald-900/40 text-emerald-400 cursor-default"
+                          : savingId === item.title
+                          ? "bg-gray-700 text-gray-400"
+                          : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                      }`}
+                    >
+                      {savedTitles.has(item.title) ? "Saved" : savingId === item.title ? "Saving..." : "Save"}
+                    </button>
+                  </div>
                 </div>
 
                 <textarea

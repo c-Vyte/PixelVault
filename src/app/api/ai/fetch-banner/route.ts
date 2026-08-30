@@ -18,26 +18,33 @@ function norm(s: string): string {
     .toLowerCase()
     .replace(/&amp;/g, "and")
     .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\b(directors|editions?|deluxe|ultimate|gold|goty|game of the year|complete|remaster(ed)?|repack|fitgirl|codex|skidrow|plaza|crack|update|v\d[\d.]*|build\s*\d+|all\s*dlc?|bonus|full|pc|free|download)\b/g, " ")
+    .replace(
+      /\b(directors|editions?|deluxe|ultimate|gold|goty|game of the year|complete|remaster(ed)?|repack|fitgirl|codex|skidrow|plaza|crack|update|v\d[\d.]*|build\s*\d+|all\s*dlc?|bonus|full|pc|free|download|edition)\b/g,
+      " "
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
 
 /** Cheap similarity score 0..1 based on shared tokens. */
 function similarity(a: string, b: string): number {
-  const ta = new Set(norm(a).split(" ").filter(Boolean));
-  const tb = new Set(norm(b).split(" ").filter(Boolean));
-  if (ta.size === 0 || tb.size === 0) return 0;
+  const ta = norm(a).split(" ").filter(Boolean);
+  const tb = norm(b).split(" ").filter(Boolean);
+  if (ta.length === 0 || tb.length === 0) return 0;
+  const setB = new Set(tb);
   let common = 0;
-  ta.forEach((t) => { if (tb.has(t)) common++; });
-  // containment matters: "blud" query vs "blud" title
-  return common / Math.max(ta.size, tb.size);
+  new Set(ta).forEach((t) => { if (setB.has(t)) common++; });
+  // Dice-style: weight coverage of the shorter (query) side more heavily.
+  const dice = (2 * common) / (new Set(ta).size + setB.size);
+  const containment = common / Math.min(new Set(ta).size, setB.size);
+  return Math.max(dice, containment * 0.9);
 }
 
-interface SteamItem { id: number; name: string; tiny_image?: string; }
+interface SteamItem { id: number; name: string; tiny_image?: string; price?: unknown; }
 
 async function steamSearch(title: string): Promise<SteamItem[]> {
-  const q = encodeURIComponent(title.replace(/^#+/, "").replace(/\s*[\(\[].*?(repack|fitgirl|codex|skidrow).*?[\)\]]/i, "").trim());
+  const clean = title.replace(/^#+/, "").replace(/\s*[\(\[].*?(repack|fitgirl|codex|skidrow|plaza).*?[\)\]]/gi, "").trim();
+  const q = encodeURIComponent(clean);
   const res = await fetch(`https://store.steampowered.com/api/storesearch/?term=${q}&cc=us&l=english`, {
     headers: { "User-Agent": UA },
     signal: timeout(REQ_TIMEOUT),
@@ -47,36 +54,59 @@ async function steamSearch(title: string): Promise<SteamItem[]> {
   return Array.isArray(data.items) ? data.items : [];
 }
 
-/** Try Steam first; pick the best-matching app, return a few candidate images. */
-async function steamBanner(title: string): Promise<{ url: string; kind: string } | null> {
-  const items = await steamSearch(title);
-  if (items.length === 0) return null;
+interface SteamDetail {
+  name?: string;
+  header_image?: string;
+  capsule_image?: string;
+  capsule_imagev5?: string;
+  library_hero_image?: string;
+  library_hero?: string;
+  screenshots?: { path_full: string }[];
+  background_raw?: string;
+  movies?: { webm?: { max?: string; 480?: string } }[];
+}
 
-  // Rank results by name similarity rather than blindly taking items[0].
-  const scored = items
-    .map((it) => ({ it, score: similarity(title, it.name) }))
-    .sort((a, b) => b.score - a.score);
-  const best = scored[0];
-  // Require a plausible match so we don't attach an unrelated game's banner.
-  if (best.score < 0.45 && items.length > 0) {
-    // Fall back to the first result only if it's a strong containment match.
-    if (similarity(title, best.it.name) < 0.35) return null;
+async function steamAppDetail(appId: number): Promise<SteamDetail | null> {
+  try {
+    const res = await fetch(`https://store.steampowered.com/api/appdetails?appids=${appId}&cc=us&l=english`, {
+      headers: { "User-Agent": UA },
+      signal: timeout(REQ_TIMEOUT),
+    });
+    if (!res.ok) return null;
+    const json = await res.json() as Record<string, { success: boolean; data: SteamDetail }>;
+    const entry = json[String(appId)];
+    return entry?.success ? entry.data : null;
+  } catch {
+    return null;
   }
-  const id = best.it.id;
-  // header.jpg = 460x215 landscape banner; library_hero = 1920x620 wide banner.
-  return { url: `https://cdn.akamai.steamstatic.com/steam/apps/${id}/library_hero.jpg`, kind: "steam-library-hero" };
 }
 
-/** Secondary Steam image if the hero 404s. */
-function steamFallbackImages(appId: number): string[] {
-  return [
-    `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`,
-    `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/capsule_616x353.jpg`,
-    `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/page_bg_raw.jpg`,
+/** Candidate image URLs for a Steam app, in preference order. */
+function steamCandidates(appId: number, detail: SteamDetail | null, want: "banner" | "poster"): string[] {
+  const cdn = (file: string) => `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/${file}`;
+  const banner = [
+    detail?.library_hero_image,
+    detail?.library_hero,
+    cdn("library_hero.jpg"),
+    detail?.header_image,
+    cdn("header.jpg"),
+    detail?.background_raw,
+    cdn("page_bg_raw.jpg"),
+    ...(detail?.screenshots?.map((s) => s.path_full) || []),
   ];
+  const poster = [
+    detail?.capsule_imagev5 || detail?.capsule_image,
+    cdn("library_600x900.jpg"),
+    cdn("capsule_616x353.jpg"),
+    detail?.header_image,
+    cdn("header.jpg"),
+  ];
+  const list = (want === "poster" ? poster : banner)
+    .filter((u): u is string => typeof u === "string" && /^https?:\/\//.test(u));
+  return Array.from(new Set(list));
 }
 
-const ALLOWED_IMG_HOSTS = /(steamstatic|steampowered|akamai|cloudflare|steamcdn|gog-cdn|gog\.com|epicgames|ubi\.com|ubisoft|rockstargames|microsoft|xbox|playstation|ign|pcgamingwiki|wikimedia|githubusercontent|moddb|indiedb|bandainamco|ea\.com|cdn\.)/i;
+const ALLOWED_IMG_HOSTS = /(steamstatic|steampowered|akamai|gog-cdn|gog\.com|epicgames|ubi\.com|ubisoft|rockstargames|microsoft|xbox|playstation|ign|pcgamingwiki|wikimedia|githubusercontent|moddb|indiedb|bandainamco|ea\.com|cdn\.)/i;
 const IMG_EXT = /\.(jpe?g|png|webp)(\?|$)/i;
 
 function absUrl(u: string, base: string): string {
@@ -84,13 +114,11 @@ function absUrl(u: string, base: string): string {
 }
 
 function pickImageFromHtml(html: string, base: string): string | null {
-  // 1. OG / twitter image (highest signal)
   const meta =
     html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image(?::src)?)["'][^>]*content=["']([^"']+)["']/i)?.[1] ||
     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image(?::src)?)["']/i)?.[1];
   if (meta) return absUrl(meta.replace(/&amp;/g, "&"), base);
 
-  // 2. Largest-looking <img> with an allowed host (game banners live on CDNs)
   const imgRe = /<img[^>]+(?:src|data-src|data-original)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["'][^>]*>/gi;
   const candidates: string[] = [];
   let m: RegExpExecArray | null;
@@ -99,18 +127,17 @@ function pickImageFromHtml(html: string, base: string): string | null {
     if (!src) continue;
     const tag = m[0];
     const w = parseInt(tag.match(/width=["']?(\d{3,4})/i)?.[1] || "0", 10);
-    // Prefer wide images (banners are 460+ wide).
     if (w && w < 300) continue;
     candidates.push(src);
     if (candidates.length >= 20) break;
   }
-  const onCdn = candidates.find((c) => ALLOWED_IMG_HOSTS.test(c));
-  return onCdn || candidates[0] || null;
+  return candidates.find((c) => ALLOWED_IMG_HOSTS.test(c)) || candidates[0] || null;
 }
 
-/** DuckDuckGo HTML search → top result pages → og:image. Robust to lite endpoint changes. */
-async function duckImage(title: string): Promise<string | null> {
-  const queries = [`${title} game steam banner`, `${title} game cover`];
+/** DuckDuckGo HTML search → top result pages → og:image. */
+async function duckImage(title: string, want: "banner" | "poster"): Promise<string | null> {
+  const shape = want === "poster" ? "cover poster" : "banner header";
+  const queries = [`${title} game steam ${shape}`, `${title} game ${shape}`];
   for (const query of queries) {
     let resultLinks: string[] = [];
     for (const endpoint of [
@@ -124,7 +151,6 @@ async function duckImage(title: string): Promise<string | null> {
         });
         if (!res.ok) continue;
         const html = await res.text();
-        // DDG wraps result targets in uddg= redirect params or plain hrefs
         const links: string[] = [];
         const re = /href="(https?:\/\/[^"]+)"/gi;
         let mm: RegExpExecArray | null;
@@ -138,7 +164,6 @@ async function duckImage(title: string): Promise<string | null> {
       } catch { /* try next endpoint */ }
     }
 
-    // Visit the top result pages and pull a banner-ish image.
     for (const pageUrl of resultLinks) {
       try {
         const res = await fetch(pageUrl, {
@@ -159,26 +184,47 @@ async function duckImage(title: string): Promise<string | null> {
   return null;
 }
 
-/** Verify an image URL actually resolves (HEAD→GET fallback). */
-async function imageExists(url: string): Promise<boolean> {
-  for (const method of ["HEAD", "GET"] as const) {
+/**
+ * Validate an image URL resolves to a real, reasonably-sized raster.
+ * Uses a ranged GET so we don't download the whole asset.
+ */
+async function validateImage(url: string): Promise<boolean> {
+  for (const method of ["GET", "HEAD"] as const) {
     try {
       const res = await fetch(url, {
         method,
-        headers: { "User-Agent": UA },
+        headers: { "User-Agent": UA, Range: "bytes=0-2047" },
         signal: timeout(6000),
         redirect: "follow",
       });
+      if (!res.ok && res.status !== 206) {
+        if (res.status === 405 || res.status === 403) continue;
+        return false;
+      }
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      const len = Number(res.headers.get("content-length") || 0);
+      const looksImage = ct.includes("image/") || IMG_EXT.test(url);
+      // Steam/CDN images are reliably real; only reject obvious non-images or
+      // placeholder-sized responses.
+      if (looksImage && (len === 0 || len > 400 || /steamstatic|steampowered|akamai/.test(url))) {
+        if (method === "GET") res.body?.cancel();
+        return true;
+      }
       if (method === "GET") res.body?.cancel();
-      if (res.ok) return true;
-      if (res.status === 405 || res.status === 403) continue;
-      return false;
+      return looksImage;
     } catch {
       if (method === "HEAD") continue;
       return false;
     }
   }
   return false;
+}
+
+async function firstValid(urls: string[]): Promise<string | null> {
+  for (const u of urls) {
+    if (await validateImage(u)) return u;
+  }
+  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -189,45 +235,53 @@ export async function POST(req: NextRequest) {
   }
   const title = typeof body.title === "string" ? body.title.trim() : "";
   if (!title) return NextResponse.json({ error: "title required" }, { status: 400 });
+  const want: "banner" | "poster" = body.kind === "poster" ? "poster" : "banner";
 
-  const tried: string[] = [];
-  const providers: string[] = [];
+  const candidates: { url: string; provider: string }[] = [];
 
-  // 1. Steam (best match) with image-type fallbacks
+  // 1. Steam — best-match app, then appdetails for verified image variants.
   try {
-    const steam = await steamBanner(title);
-    if (steam) {
-      tried.push(steam.url);
-      if (await imageExists(steam.url)) {
-        recordApiCall({ route: "/api/ai/fetch-banner", provider: "steam-hero", ok: true, latencyMs: Date.now() - started });
-        return NextResponse.json({ banner: steam.url, provider: "steam-library-hero", title });
-      }
-      const appId = steam.url.match(/apps\/(\d+)/)?.[1];
-      if (appId) {
-        for (const fb of steamFallbackImages(Number(appId))) {
-          tried.push(fb);
-          if (await imageExists(fb)) {
-            recordApiCall({ route: "/api/ai/fetch-banner", provider: "steam-fallback", ok: true, latencyMs: Date.now() - started });
-            return NextResponse.json({ banner: fb, provider: "steam", title });
-          }
+    const items = await steamSearch(title);
+    if (items.length > 0) {
+      const scored = items
+        .map((it) => ({ it, score: similarity(title, it.name) }))
+        .sort((a, b) => b.score - a.score);
+      // Accept the top result when it's a reasonable match; try the first 2 apps.
+      const top = scored.slice(0, scored[0].score >= 0.3 ? 2 : 1);
+      for (const { it, score } of top) {
+        if (score < 0.2 && it !== scored[0].it) continue;
+        const detail = await steamAppDetail(it.id);
+        const urls = steamCandidates(it.id, detail, want);
+        const valid = await firstValid(urls);
+        if (valid) {
+          recordApiCall({ route: "/api/ai/fetch-banner", provider: "steam", ok: true, latencyMs: Date.now() - started });
+          return NextResponse.json({
+            banner: valid,
+            provider: "steam",
+            steamAppId: it.id,
+            matchedTitle: detail?.name || it.name,
+            kind: want,
+            candidates: urls.slice(0, 6),
+            title,
+          });
         }
+        urls.forEach((url) => candidates.push({ url, provider: "steam" }));
       }
-      providers.push("steam");
     }
   } catch { /* fall through to web */ }
 
   // 2. Web search (DuckDuckGo → result page og:image)
   try {
-    const web = await duckImage(title);
-    if (web) {
+    const web = await duckImage(title, want);
+    if (web && (await validateImage(web))) {
       recordApiCall({ route: "/api/ai/fetch-banner", provider: "web-og", ok: true, latencyMs: Date.now() - started });
-      return NextResponse.json({ banner: web, provider: "web", title });
+      return NextResponse.json({ banner: web, provider: "web", kind: want, title });
     }
   } catch { /* no banner */ }
 
   recordApiCall({ route: "/api/ai/fetch-banner", provider: "none", ok: false, latencyMs: Date.now() - started, error: "not found" });
   return NextResponse.json(
-    { error: "No banner found on the internet for this title. Try a more exact title, or add the banner manually.", tried: tried.slice(0, 8) },
+    { error: "No banner found on the internet for this title. Try a more exact title, request a poster instead, or add it manually.", candidates: candidates.slice(0, 8) },
     { status: 404 }
   );
 }

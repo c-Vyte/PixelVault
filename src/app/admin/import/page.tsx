@@ -700,10 +700,24 @@ export default function AdminImport() {
               ? { resolveState: l.resolveState as "direct" | "alive" | "dead" | "blocked", resolvedAt: new Date().toISOString() }
               : {}),
           });
+          const partBase = (url: string, name: string): string => {
+            let file = name;
+            try {
+              const u = new URL(url);
+              file = decodeURIComponent(u.hash.replace(/^#/, "") || u.pathname.split("/").pop() || name);
+            } catch { file = name || url; }
+            return file
+              .replace(/[._-]part?0*\d+\s*(\.(rar|zip|7z|exe))?$/i, "$1")
+              .replace(/\.\d{3}(\.|$)/i, "$1")
+              .toLowerCase()
+              .replace(/\.[a-z0-9]{2,5}$/i, "");
+          };
           for (const l of rawLinks) {
             if (l.part) {
               const host = (() => { try { return new URL(l.url).hostname; } catch { return l.url; } })();
-              const key = `${l.type || "direct"}|${host}`;
+              // Key on host + archive base name so two different multi-part
+              // files on the same hoster don't collapse into one entry.
+              const key = `${l.type || "direct"}|${host}|${partBase(l.url, l.name)}`;
               const arr = groups.get(key) || [];
               arr.push({ url: l.url, part: l.part, partTotal: l.partTotal, name: l.name || "Download", type: l.type || "direct", directUrl: l.directUrl, resolveState: l.resolveState });
               groups.set(key, arr);
