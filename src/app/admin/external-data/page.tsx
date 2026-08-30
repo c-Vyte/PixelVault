@@ -101,18 +101,20 @@ function toSoftware(item: any, source: string): Software {
       const directGroup = group.filter((g: any) => g.type !== "torrent" && typeof g.url === "string" && g.url.startsWith("http"));
       const torrentGroup = group.filter((g: any) => g.type === "torrent");
       if (directGroup.length > 1) {
-        // multiple parts -> single repack entry with parts
-        const first = directGroup[0];
-        const hostName = cleanStr(first.hoster) || hostKey.split(".")[0];
-        // Limit parts to 20 to prevent storage issues
         const limitedParts = directGroup.slice(0, 20);
-        links.push({
-          name: hostName ? hostName.charAt(0).toUpperCase() + hostName.slice(1) : "Repack",
-          url: typeof first.url === "string" ? first.url : "",
-          type: "repack" as const,
-          parts: limitedParts.length,
-          partLinks: limitedParts.map((g: any, idx: number) => ({ part: idx + 1, url: g.url })),
-        } as any);
+        const hostNameRaw = cleanStr(limitedParts[0].hoster) || hostKey.split(".")[0];
+        const hostName = hostNameRaw ? hostNameRaw.charAt(0).toUpperCase() + hostNameRaw.slice(1) : "Repack";
+        for (let idx = 0; idx < limitedParts.length; idx++) {
+          const g = limitedParts[idx];
+          links.push({
+            name: cleanStr(g.name) || hostName,
+            url: g.url,
+            type: "direct" as const,
+            hoster: hostName,
+            part: idx + 1,
+            partTotal: limitedParts.length,
+          } as any);
+        }
       } else if (directGroup.length === 1) {
         const g = directGroup[0];
         links.push({

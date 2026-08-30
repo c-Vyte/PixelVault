@@ -292,7 +292,8 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                 <>
                   {sortedHosts.map((host) => {
                     const links = directGroups[host];
-                    const isMultiPart = links.length > 1 || !!(links[0] as any)?.partTotal;
+                    const repack: any = links.length === 1 && (links[0] as any).type === "repack" && Array.isArray((links[0] as any).partLinks) ? (links[0] as any) : null;
+                    const isMultiPart = repack ? true : (links.length > 1 || !!(links[0] as any)?.partTotal);
                     const hostLabel = host.toUpperCase();
                     const hostColor =
                       /DATANODES|PIXELDRAIN|MEDIAFIRE/i.test(hostLabel) ? "text-white" :
@@ -300,11 +301,11 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                       /1FICHIER|FILEKEEPER/i.test(hostLabel) ? "text-red-400" : "text-purple-400";
 
                     // Sort parts numerically
-                    const sorted = [...links].sort((a: any, b: any) => (a.part || 0) - (b.part || 0));
+                    const sorted = repack ? [] : [...links].sort((a: any, b: any) => (a.part || 0) - (b.part || 0));
 
                     return (
                       <div key={host} className="flex flex-col items-center">
-                        <span className={`text-xs font-black tracking-wider mb-2 ${hostColor}`}>{hostLabel}{isMultiPart ? ` • ${links.length} parts` : ""}</span>
+                        <span className={`text-xs font-black tracking-wider mb-2 ${hostColor}`}>{hostLabel}{isMultiPart ? ` • ${repack ? repack.partLinks.length : links.length} parts` : ""}</span>
                         {!isMultiPart ? (
                           <button
                             onClick={() => handleLinkDownload(sorted[0].url)}
@@ -312,6 +313,21 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                           >
                             DOWNLOAD HERE
                           </button>
+                        ) : repack ? (
+                          <div className="flex flex-wrap justify-center gap-2 max-w-xl">
+                            {repack.partLinks.map((p: any) => (
+                              <a
+                                key={`repack-${host}-${p.part}`}
+                                href={p.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => { e.preventDefault(); handleLinkDownload(p.url); }}
+                                className="px-4 py-2 rounded-md bg-[#1e0f3a] border border-purple-700/50 text-white text-xs font-bold hover:bg-purple-800/30 transition-colors shadow-[0_0_8px_rgba(168,85,247,0.25)] min-w-[84px] text-center"
+                              >
+                                Part {p.part}
+                              </a>
+                            ))}
+                          </div>
                         ) : (
                           <div className="flex flex-wrap justify-center gap-2 max-w-xl">
                             {sorted.map((link: any, idx: number) => {
