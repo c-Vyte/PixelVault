@@ -143,6 +143,9 @@ export default function AdminImport() {
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [error, setError] = useState("");
+  /** Structured error so the banner can offer the right recovery action. */
+  const [errorInfo, setErrorInfo] = useState<{ kind: "blocked" | "network" | "empty" | "info"; message: string } | null>(null);
+  const discoverAbortRef = useRef<AbortController | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [imported, setImported] = useState(0);
   const [updated, setUpdated] = useState(0);
@@ -164,6 +167,10 @@ export default function AdminImport() {
 
   const fetchList = async () => {
     setError("");
+    setErrorInfo(null);
+    discoverAbortRef.current?.abort();
+    const controller = new AbortController();
+    discoverAbortRef.current = controller;
     setLoadingList(true);
     setItems([]);
     setSelected(new Set());
@@ -171,10 +178,14 @@ export default function AdminImport() {
     setUpdated(0);
     setSkipped(0);
     setProgress({ done: 0, total: 0 });
+    const fail = (kind: "blocked" | "network" | "empty" | "info", message: string) => {
+      setError(message);
+      setErrorInfo({ kind, message });
+    };
     try {
       if (mode === "paste") {
         if (!pasteHtml.trim()) {
-          setError("Paste the HTML source of a listing page or detail page first.");
+          fail("info", "Paste the HTML source of a listing page or detail page first.");
           return;
         }
         const sourceHint = url.trim() || "https://lightdload.xyz/";
@@ -189,7 +200,7 @@ export default function AdminImport() {
         } else {
           const entries = parseListingPage(pasteHtml, sourceHint);
           if (entries.length === 0) {
-            setError("No entries found in the pasted HTML. Make sure you copied the full page source (Ctrl+A then Ctrl+C).");
+            fail("empty", "No entries found in the pasted HTML. Make sure you copied the full page source (Ctrl+A then Ctrl+C).");
             return;
           }
           setSource(`${new URL(sourceHint).hostname} (pasted listing, ${entries.length} entries)`);
@@ -207,21 +218,31 @@ export default function AdminImport() {
         return;
       }
       if (!url.trim()) {
-        setError("Enter a URL first.");
+        fail("info", "Enter a URL first.");
         return;
       }
       const endpoint = mode === "site" ? "/api/import/site" : "/api/import/list";
-      const res = await fetch(`${endpoint}?url=${encodeURIComponent(url.trim())}`);
+      const res = await fetch(`${endpoint}?url=${encodeURIComponent(url.trim())}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       const data = await res.json();
       if (!res.ok) {
         if (data.blocked) {
-          setError(
-            (data.error || "This site is protected and blocked automated access.") +
-            " → Switch to 'Paste HTML' mode above."
+          fail(
+            "blocked",
+            data.error || "This site is protected and blocked automated access."
           );
+        } else if (res.status === 502 || res.status === 0 || /could not reach|fetch failed|timeout|network/i.test(data.error || "")) {
+          fail("network", data.error || "Could not reach the site. Check the URL and your connection, or use Paste HTML mode.");
+        } else if (data.entries && data.entries.length === 0) {
+          fail("empty", data.error || "The site was reached but no downloadable entries were found. Try a listing-page URL or Paste HTML mode.");
         } else {
-          setError(data.error || "Failed to fetch the page. Check the URL and try again.");
+          fail("info", data.error || "Failed to fetch the page. Check the URL and try again.");
         }
+        return;
+      }
+      if (!data.entries || data.entries.length === 0) {
+        setSource(data.source || "");
+        fail("empty", "Reached the site but found no game/app entries. Check the URL points to a listing, or use Paste HTML mode with the page source.");
         return;
       }
       setSource(data.source);
@@ -235,11 +256,29 @@ export default function AdminImport() {
       if (sentencey.length > 0) {
         setSentencePrompt(sentencey);
       }
-    } catch {
-      setError("Could not reach the import API.");
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // user cancelled — leave whatever state is there
+        return;
+      }
+      fail("network", "Could not reach the import API. Check the server is running.");
     } finally {
+      if (discoverAbortRef.current === controller) discoverAbortRef.current = null;
       setLoadingList(false);
     }
+  };
+
+  const cancelDiscover = () => {
+    discoverAbortRef.current?.abort();
+    discoverAbortRef.current = null;
+    setLoadingList(false);
+  };
+
+  /** Jump to paste mode keeping the entered URL as the source hint. */
+  const switchToPaste = () => {
+    setMode("paste");
+    setError("");
+    setErrorInfo(null);
   };
 
   const toggleAll = (checked: boolean) => {
@@ -989,16 +1028,83 @@ export default function AdminImport() {
           <button
             onClick={fetchList}
             disabled={loadingList || !url.trim()}
-            className="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
           >
-            {loadingList ? "Discovering…" : "Discover Apps"}
+            {loadingList && (
+              <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+            )}
+            {loadingList
+              ? mode === "site"
+                ? "Crawling site (sitemaps, pages…)…"
+                : "Fetching listing…"
+              : "Discover Apps"}
           </button>
+          {loadingList && (
+            <button
+              onClick={cancelDiscover}
+              className="px-4 py-2.5 rounded-lg bg-[#0a0f1a] border border-red-900/50 text-red-300 hover:text-red-200 font-semibold"
+            >
+              Cancel
+            </button>
+          )}
         </div>
           </>
         )}
-        {error && <p className="text-red-400 text-sm mt-3">{error}</p>}
-        {source && (
-          <p className="text-emerald-400/80 text-sm mt-3">
+        {error && (
+          <div
+            className={`mt-4 rounded-lg border p-4 ${
+              errorInfo?.kind === "blocked"
+                ? "bg-amber-950/40 border-amber-700/40"
+                : errorInfo?.kind === "network"
+                  ? "bg-orange-950/30 border-orange-800/40"
+                  : "bg-red-950/30 border-red-800/40"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <span className="text-lg leading-6">
+                {errorInfo?.kind === "blocked" ? "⛨" : errorInfo?.kind === "network" ? "🌐" : "⚠️"}
+              </span>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-white">
+                  {errorInfo?.kind === "blocked"
+                    ? "Site is protected (Cloudflare / captcha)"
+                    : errorInfo?.kind === "network"
+                      ? "Couldn't reach the site"
+                      : errorInfo?.kind === "empty"
+                        ? "No entries found"
+                        : "Heads up"}
+                </p>
+                <p className="text-sm text-gray-300 mt-1">{error}</p>
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {(errorInfo?.kind === "blocked" || errorInfo?.kind === "network" || errorInfo?.kind === "empty") && mode !== "paste" && (
+                    <button
+                      onClick={switchToPaste}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold"
+                    >
+                      Switch to Paste HTML
+                    </button>
+                  )}
+                  {mode !== "paste" && (
+                    <button
+                      onClick={fetchList}
+                      className="px-3 py-1.5 rounded-lg bg-[#0a0f1a] border border-blue-900/50 text-blue-200 hover:text-white text-xs font-semibold"
+                    >
+                      ↻ Retry
+                    </button>
+                  )}
+                </div>
+                {errorInfo?.kind === "blocked" && (
+                  <p className="text-xs text-amber-200/70 mt-2">
+                    Open the page in your browser, solve the challenge if any, press <kbd className="px-1 bg-black/40 rounded">Ctrl+A</kbd> then <kbd className="px-1 bg-black/40 rounded">Ctrl+C</kbd>, and paste it in Paste HTML mode.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        {source && !error && (
+          <p className="text-emerald-400/80 text-sm mt-3 flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
             Found {entries.length} {mode === "site" ? "games across the site" : "entries"} on {source}
           </p>
         )}
@@ -1024,15 +1130,52 @@ export default function AdminImport() {
             {items.map((it, i) => {
               const show = nameFilter.trim() ? filteredItems.includes(i) : true;
               if (!show) return null;
+              const linkCount = it.detail?.links?.length ?? 0;
               return (
                 <label key={i} className="flex items-center gap-3 px-4 py-2.5 hover:bg-blue-900/20 cursor-pointer">
-                  <input type="checkbox" checked={selected.has(i)} onChange={() => toggleOne(i)} className="accent-blue-600" />
+                  <input type="checkbox" checked={selected.has(i)} onChange={() => toggleOne(i)} className="accent-blue-600 shrink-0" />
                   <span className="text-white text-sm truncate">{it.entry.title}</span>
+                  {it.loading && (
+                    <span className="flex items-center gap-1.5 text-blue-300/70 data-xs shrink-0">
+                      <span className="w-3 h-3 border-2 border-blue-400/40 border-t-blue-300 rounded-full animate-spin" />
+                      fetching…
+                    </span>
+                  )}
+                  {it.error && (
+                    <span className="text-red-300/90 data-xs shrink-0 truncate max-w-[220px]" title={it.error}>
+                      ⚠ {it.error}
+                    </span>
+                  )}
+                  {it.detail && !it.error && (
+                    <span className={`data-xs shrink-0 ${linkCount > 0 ? "text-emerald-300/80" : "text-amber-300/80"}`}>
+                      {linkCount > 0 ? `${linkCount} link${linkCount === 1 ? "" : "s"}` : "no links"}
+                    </span>
+                  )}
                   <span className="text-blue-300/40 data-xs truncate ml-auto">{it.entry.url}</span>
                 </label>
               );
             })}
           </div>
+          {items.length > 0 && (
+            <div className="flex items-center gap-3 mt-3 text-xs text-blue-300/60 flex-wrap">
+              <span className="font-semibold text-blue-200">{selectedCount} selected</span>
+              <span>·</span>
+              <span className="text-emerald-300/70">{items.filter((it) => it.detail && !it.error).length} with details</span>
+              <span>·</span>
+              <span className="text-red-300/70">{items.filter((it) => it.error).length} failed</span>
+              {items.some((it) => it.error) && (
+                <button
+                  onClick={() => {
+                    const failed = items.map((it, i) => (it.error ? i : -1)).filter((i) => i >= 0);
+                    setSelected(new Set(failed));
+                  }}
+                  className="text-red-300 hover:text-red-200 underline underline-offset-2"
+                >
+                  Select failed to retry
+                </button>
+              )}
+            </div>
+          )}
           {loadingDetails && (
             <div className="mt-4">
               <div className="flex items-center justify-between mb-1">
@@ -1050,10 +1193,13 @@ export default function AdminImport() {
           <button
             onClick={fetchDetails}
             disabled={selectedCount === 0 || loadingDetails}
-            className="mt-4 px-5 py-2.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="mt-4 px-5 py-2.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
           >
+            {loadingDetails && (
+              <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+            )}
             {loadingDetails
-              ? "Fetching download links…"
+              ? `Fetching download links… ${progress.done}/${progress.total}`
               : `Fetch download links for ${selectedCount} selected`}
           </button>
         </div>
