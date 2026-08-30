@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { categories, getSoftwareByIdLive, type Software } from "@/lib/data";
 import { parseGameDetails, type ParsedGameData } from "@/lib/parseGameDetails";
+import { groupLinks } from "@/lib/partGroups";
 
 const DRAFT_KEY = "editFormDraft";
 
@@ -251,45 +252,15 @@ function EditSoftwareForm() {
       cracked: "cracked",
       torrent: "torrent",
     };
-    const rawLinks = (urlFetchData.links || []).filter((l) => l.url && l.url.trim());
-    const typeOf = (l: { type?: string; url: string }) =>
-      (typeMap[l.type || ""] || classifyDomain(l.url)) as "official" | "repack" | "direct" | "cracked" | "torrent";
-
-    const links: typeof form.downloadLinks = [];
-    const partGroups = new Map<string, { url: string; part: number; partTotal?: number; name: string }[]>();
-    for (const l of rawLinks) {
-      if (l.part) {
-        const host = (() => { try { return new URL(l.url).hostname; } catch { return l.url; } })();
-        const key = `${typeOf(l)}|${host}`;
-        const arr = partGroups.get(key) || [];
-        arr.push({ url: l.url, part: l.part, partTotal: l.partTotal, name: l.name || "Download" });
-        partGroups.set(key, arr);
-      }
-    }
-    for (const [, arr] of partGroups) {
-      const sorted = arr.sort((a, b) => a.part - b.part);
-      const total = sorted[0]?.partTotal || sorted.length;
-      const first = sorted[0];
-      links.push({
-        name: first.name.replace(/\s*\(Part.*$/, ""),
-        url: first.url,
-        type: typeOf({ url: first.url }),
-        parts: total,
-        partLinks: sorted.map((s) => ({ part: s.part, url: s.url })),
-        status: "unknown" as const,
-      });
-    }
-    for (const l of rawLinks) {
-      if (l.part) continue;
-      links.push({
-        name: l.name || "Download",
+    const rawLinks = (urlFetchData.links || []).filter((l: { url?: string }) => l.url && l.url.trim());
+    const links = groupLinks(
+      rawLinks.map((l: { url: string; name?: string; type?: string }) => ({
         url: l.url,
-        type: typeOf(l),
-        parts: 1,
-        partLinks: [] as { part: number; url: string }[],
-        status: "unknown" as const,
-      });
-    }
+        name: l.name || "Download",
+        type: (typeMap[l.type || ""] || classifyDomain(l.url)) as string,
+      })),
+      (u) => classifyDomain(u) as "official" | "repack" | "direct" | "cracked" | "torrent"
+    ) as typeof form.downloadLinks;
     setForm((prev: typeof form) => ({
       ...prev,
       title: urlFetchData.title || prev.title,
@@ -493,17 +464,20 @@ function EditSoftwareForm() {
   };
 
   const handleBulkPaste = () => {
-    const lines = bulkUrls.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("http"));
+    const lines = bulkUrls
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("http"));
     if (lines.length === 0) return;
-    const newLinks = lines.map((url) => ({
-      name: domainLabel(url),
-      url,
-      type: classifyDomain(url) as "official" | "repack" | "direct" | "cracked" | "torrent",
-      parts: 1,
-      partLinks: [] as { part: number; url: string }[],
-      status: "unknown" as const,
-    }));
-    setForm({ ...form, downloadLinks: [...form.downloadLinks, ...newLinks] });
+    // Group multi-part archives (part1.rar … partN.rar on the same host) into
+    // single repack entries; name each link by its host for quick scanning.
+    const grouped = groupLinks(
+      lines.map((url) => ({ url, name: domainLabel(url), type: classifyDomain(url) })),
+      (u) => classifyDomain(u) as "official" | "repack" | "direct" | "cracked" | "torrent"
+    );
+    const existing = new Set(form.downloadLinks.map((l: { url: string }) => l.url.trim().toLowerCase()));
+    const fresh = (grouped as typeof form.downloadLinks).filter((l: { url: string }) => !existing.has(l.url.trim().toLowerCase()));
+    setForm({ ...form, downloadLinks: [...form.downloadLinks, ...fresh] });
     setBulkUrls("");
   };
 

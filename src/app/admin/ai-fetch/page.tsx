@@ -90,6 +90,23 @@ export default function AiFetchPage() {
         return;
       }
       const now = new Date().toISOString().split("T")[0];
+
+      // Best-effort: grab a real banner from the internet for the AI entry.
+      let banner = "";
+      try {
+        const r = await fetch("/api/ai/fetch-banner", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: finalTitle }),
+        });
+        if (r.ok) {
+          const d = await r.json();
+          if (d.banner) banner = d.banner;
+        }
+      } catch { /* keep placeholder */ }
+
+      const placeholder = (w: number, h: number, bg: string) =>
+        `https://placehold.co/${w}x${h}/${bg}/ffffff?text=${encodeURIComponent(finalTitle.slice(0, 20))}`;
       const entry: Software = {
         id: makeId(finalTitle),
         title: finalTitle,
@@ -101,9 +118,9 @@ export default function AiFetchPage() {
         size: item.meta.size || "",
         downloads: 0,
         rating: 4,
-        icon: `https://placehold.co/616x352/7c3aed/ffffff?text=${encodeURIComponent(finalTitle.slice(0, 20))}`,
-        poster: `https://placehold.co/600x900/4c1d95/ffffff?text=${encodeURIComponent(finalTitle.slice(0, 20))}`,
-        screenshots: [],
+        icon: banner || placeholder(616, 352, "7c3aed"),
+        poster: banner || placeholder(600, 900, "4c1d95"),
+        screenshots: banner ? [banner] : [],
         downloadLinks: [{ name: "Download", url: "", type: "official" }],
         features: Array.isArray(item.meta.features) ? item.meta.features : [],
         systemRequirements: "",

@@ -5,6 +5,12 @@ export const dynamic = "force-dynamic";
 
 const PROVIDERS = [
   {
+    name: "grok",
+    url: "https://api.x.ai/v1/chat/completions",
+    keyEnv: "XAI_API_KEY",
+    model: "grok-3-mini",
+  },
+  {
     name: "groq",
     url: "https://api.groq.com/openai/v1/chat/completions",
     keyEnv: "GROQ_API_KEY",
@@ -39,12 +45,14 @@ Return ONLY valid JSON, no markdown fences, with this exact shape:
   "description": "2-3 sentence polished marketing description",
   "features": ["short feature string", "..."],
   "tags": ["action", "rpg"],
-  "category": "pc-games" | "apps" | "android-apps",
-  "platform": "windows" | "mac" | "android" | "cross-platform",
+  "category": one of ["pc-games", "windows", "mac", "android", "movies", "ebooks", "tutorials", "korean"],
+  "platform": one of ["windows", "mac", "android", "cross-platform"],
   "version": "latest known version or empty string",
   "size": "approximate size like '45 GB' or empty string"
 }
 Rules:
+- category must be one of the listed ids. Use "pc-games" for games, "windows"/"mac"/"android" for apps/software on those platforms, "movies" for films, "tutorials" for courses/udemy, "ebooks" for books.
+- platform describes the runtime OS; for PC games use "windows" unless explicitly mac/cross-platform.
 - If context/description is provided, ALWAYS use it to enhance and rewrite — never return found:false when context is given, even for obscure titles.
 - Only return found:false when no context is given AND the title is not a real product.
 - Strip leading # or punctuation from titles like "#BLUD" → "BLUD" for lookup but keep display title polished.`;
@@ -115,11 +123,20 @@ export async function POST(req: NextRequest) {
   type InputItem = { title: string; description?: string };
   let inputs: InputItem[] = [];
 
-  if (Array.isArray((body as any).items)) {
-    inputs = (body as any).items
-      .filter((x: any) => x && typeof x.title === "string")
-      .map((x: any) => ({ title: String(x.title).trim(), description: typeof x.description === "string" ? x.description.slice(0, 2000) : undefined }))
-      .filter((x: any) => x.title)
+  const itemsArr = Array.isArray(body.items) ? (body.items as unknown[]) : [];
+  if (itemsArr.length > 0) {
+    inputs = itemsArr
+      .map((x): { title: string; description?: string } | null => {
+        const rec = x && typeof x === "object" ? (x as Record<string, unknown>) : null;
+        if (!rec || typeof rec.title !== "string") return null;
+        const title = rec.title.trim();
+        if (!title) return null;
+        return {
+          title,
+          description: typeof rec.description === "string" ? rec.description.slice(0, 2000) : undefined,
+        };
+      })
+      .filter((x): x is { title: string; description?: string } => !!x)
       .slice(0, 20);
   }
   if (inputs.length === 0 && Array.isArray(body.titles)) {
@@ -143,9 +160,37 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const results: { title: string; meta: AiMeta | null; provider: string; error?: string }[] = [];
+  const VALID_CATEGORIES = ["pc-games", "windows", "mac", "android", "movies", "ebooks", "tutorials", "korean"];
+  const VALID_PLATFORMS = ["windows", "mac", "android", "cross-platform", "ios"];
 
-  for (const input of inputs) {
+  function normalizeMeta(meta: AiMeta, contextDesc: string): AiMeta {
+    const out: AiMeta = { ...meta };
+    if (contextDesc && out.found === false) {
+      out.found = true;
+      out.description = out.description || contextDesc.slice(0, 400);
+    }
+    if (out.category && !VALID_CATEGORIES.includes(out.category)) {
+      // map a few common synonyms, else drop to default by the caller
+      const c = out.category.toLowerCase();
+      out.category =
+        c.includes("game") ? "pc-games" :
+        c.includes("movie") || c.includes("film") ? "movies" :
+        c.includes("android") ? "android" :
+        c.includes("mac") ? "mac" :
+        c.includes("book") ? "ebooks" :
+        c.includes("tutorial") || c.includes("course") ? "tutorials" :
+        "pc-games";
+    }
+    if (out.platform && !VALID_PLATFORMS.includes(out.platform)) {
+      out.platform = "windows";
+    }
+    if (!Array.isArray(out.features)) out.features = [];
+    if (!Array.isArray(out.tags)) out.tags = [];
+    if (typeof out.description !== "string") out.description = "";
+    return out;
+  }
+
+  async function enrichOne(input: InputItem) {
     const title = input.title;
     const contextDesc = input.description?.trim() || "";
     const prompt = contextDesc
@@ -159,12 +204,13 @@ export async function POST(req: NextRequest) {
         const started = Date.now();
         try {
           const text = await callProvider(provider, prompt);
-          const meta = parseJsonLoose(text);
-          if (!meta) throw new Error("unparseable response");
-          if (contextDesc && meta.found === false) {
-            meta.found = true;
-            meta.description = meta.description || contextDesc.slice(0, 400);
+          let meta = parseJsonLoose(text);
+          if (!meta) {
+            // One more salvage pass: the model sometimes wraps JSON in prose.
+            meta = parseJsonLoose(text.replace(/[^{]*(\{[\s\S]*\}).*/, "$1"));
           }
+          if (!meta) throw new Error("unparseable response");
+          meta = normalizeMeta(meta, contextDesc);
           recordApiCall({
             route: "/api/ai/enrich",
             provider: provider.name,
@@ -193,13 +239,28 @@ export async function POST(req: NextRequest) {
       if (delivered.meta) break;
     }
 
-    results.push({
+    return {
       title,
       meta: delivered.meta,
       provider: delivered.provider,
       ...(lastError && !delivered.meta ? { error: lastError } : {}),
-    });
+    };
   }
+
+  // Run enrichments with bounded concurrency (providers rate-limit; 3 is safe
+  // and turns a 20-title batch from ~minutes down to a few tens of seconds).
+  const results: { title: string; meta: AiMeta | null; provider: string; error?: string }[] =
+    new Array(inputs.length);
+  let cursor = 0;
+  const CONCURRENCY = 3;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, inputs.length) }, async () => {
+      while (cursor < inputs.length) {
+        const i = cursor++;
+        results[i] = await enrichOne(inputs[i]);
+      }
+    })
+  );
 
   return NextResponse.json({ results });
 }
