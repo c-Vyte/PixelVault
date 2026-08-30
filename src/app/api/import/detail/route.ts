@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseDetailPage, guessContentType } from "@/lib/importParser";
 import { fetchWithFallback } from "@/lib/fetchers";
+import { isCloudflareChallenge } from "@/lib/fetchUtils";
 import { recordApiCall } from "@/lib/apiUsage";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
-
-function isCloudflareChallenge(html: string): boolean {
-  return /Just a moment|cf-chl|cFp|c__cf_chl|challenge-platform|cf_chl_opt|Checking your browser|Ray ID:/i.test(html);
-}
 
 export async function GET(request: NextRequest) {
   const url = request.nextUrl.searchParams.get("url");

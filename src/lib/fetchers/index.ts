@@ -41,10 +41,17 @@ export class FetcherRegistry {
       const siteConfig = getSiteConfig(url);
       const browserResult = await browserFetcher.fetch(url, { ...options, ...siteConfig });
 
-      // 4. Silent fallback: if browser fails, return HTTP result anyway
+      // 4. Silent fallback: if browser fails, return HTTP result anyway.
+      //    Prefer the HTTP result's error/status when both failed — a
+      //    "browser unavailable" message would otherwise mask the real cause
+      //    (network blocked, timeout, 4xx) and mislabel it as browser trouble.
       if (browserResult.ok) return browserResult;
       if (httpResult.ok) return httpResult;
-      return browserResult; // return browser error
+      return {
+        ...browserResult,
+        status: httpResult.status || browserResult.status,
+        error: httpResult.error || browserResult.error,
+      };
     }
 
     // 5. No browser available or not needed - return HTTP

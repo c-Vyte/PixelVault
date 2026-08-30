@@ -35,9 +35,24 @@ export const BROWSER_HEADERS: Record<string, string> = {
   "Upgrade-Insecure-Requests": "1",
 };
 
-/** True when an HTML body looks like a Cloudflare / WAF interstitial page. */
+/**
+ * True when an HTML body looks like a Cloudflare / WAF interstitial page.
+ * Tokens are deliberately specific: loose substrings like "cFp" or
+ * "challenge-platform" alone appear in normal sites' scripts and produced
+ * false "site is cloud protected" reports. A body only counts as a
+ * challenge when it pairs an interstitial phrase with a Cloudflare signal.
+ */
 export function isCloudflareChallenge(html: string): boolean {
-  return /Just a moment|cf-chl|cFp|c__cf_chl|challenge-platform|cf_chl_opt/i.test(html);
+  if (!html || html.length < 200) return false;
+  // Cloudflare injects these script/assets paths into every interstitial.
+  const cfSignal =
+    /cdn-cgi\/challenge-platform|\/__cdn-cgi\/challenge|cf-chl-[a-z]+|cf_chl_opt|__cf_chl_(rt|tk|c|f)/i;
+  // The phrase a CF/WAF interstitial page shows the visitor.
+  const cfPhrase =
+    /<title>[^<]*just a moment[^<]*<\/title>|just a moment\.\.\.|checking your browser before accessing|verifying you are human|needs to review the security of your connection|attention required[^<]*cloudflare|enable javascript and cookies to continue/i;
+  // Ray IDs look like "Ray ID: 8a1b2c3d4e5f6a7b" (16 hex) on CF error pages.
+  const rayId = /ray id:\s*[0-9a-f]{12,}/i;
+  return cfSignal.test(html) || (cfPhrase.test(html) && /cloudflare|cdn-cgi|cf-chl|challenge/i.test(html)) || (rayId.test(html) && /cloudflare|cdn-cgi/i.test(html));
 }
 
 /** URL schemes that should never be fetched from the server (SSRF hardening). */

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseListingPage, type ParsedEntry } from "@/lib/importParser";
 import { fetchWithFallback } from "@/lib/fetchers";
+import { isCloudflareChallenge } from "@/lib/fetchUtils";
 
 const BLOCKED_HOSTS = ["repacks-games.com"];
 
@@ -52,8 +53,13 @@ function isGameUrl(u: URL, origin: string): boolean {
   return true;
 }
 
-function isCloudflareChallenge(html: string): boolean {
-  return /Just a moment|cf-chl|cFp|c__cf_chl|challenge-platform|cf_chl_opt|Checking your browser|Ray ID:/i.test(html);
+/** Pull Sitemap: URLs listed in robots.txt (often reachable when the root page is gated). */
+function extractRobotsSitemaps(text: string): string[] {
+  const out: string[] = [];
+  const re = /^\s*sitemap:\s*(\S+)/gim;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) out.push(m[1].trim());
+  return out;
 }
 
 /** Dedup in-flight fetches so the same sitemap URL isn't fetched twice. */
@@ -119,43 +125,50 @@ export async function GET(request: NextRequest) {
   const deadline = Date.now() + CRAWL_WALL_CLOCK_MS;
   const expired = () => Date.now() > deadline;
 
-  // 1. Discover sitemap URLs from the root page
-  const root = await fetchUrl(origin + "/", { timeoutMs: 15000 });
-  if (!root.ok && (root.status === 403 || root.status === 503 || root.error === "cloudflare")) {
-    return NextResponse.json(
-      {
-        error:
-          "This site is protected (Cloudflare or WAF) and blocked automated access. " +
-          "Open a listing page in your browser, press Ctrl+A then Ctrl+C to copy the source, " +
-          "then switch to 'Paste HTML' mode in the importer.",
-        blocked: true,
-      },
-      { status: 403 }
-    );
-  }
-  if (root.ok) {
-    if (isCloudflareChallenge(root.text)) {
-      return NextResponse.json(
-        {
-          error:
-            "This site is protected by Cloudflare and requires a browser challenge. " +
-            "Open a listing page in your browser, solve the challenge, then press Ctrl+A / Ctrl+C " +
-            "and use the 'Paste HTML' import mode.",
-          blocked: true,
-        },
-        { status: 403 }
-      );
-    }
+  // 1. Discover sitemap URLs. We try the homepage, robots.txt and the usual
+  //    sitemap paths in parallel — a site may gate the root page (Cloudflare)
+  //    while still serving robots.txt / sitemap.xml freely, so a blocked
+  //    homepage alone is NOT enough to report the site as protected.
+  const sitemapCandidates = [
+    "/sitemap_index.xml",
+    "/sitemap.xml",
+    "/wp-sitemap.xml",
+    "/sitemap_index.xml.gz",
+    "/sitemap.xml.gz",
+  ];
+  const [root, robots] = await Promise.all([
+    fetchUrl(origin + "/", { timeoutMs: 15000 }),
+    fetchUrl(origin + "/robots.txt", { timeoutMs: 12000 }),
+  ]);
+
+  if (root.ok && !isCloudflareChallenge(root.text)) {
     const sitemapRefs = root.text.match(/<sitemap><loc>([^<]+)<\/loc>/g);
-    const inlineSitemaps = (root.text.match(/https?:\/\/[^"'\s<>]+sitemap[^"'\s<>]*\.xml(?:\.gz)?/gi) || [])
-      .map((s) => s.replace(/&/g, "&"));
-    for (const s of [...(sitemapRefs || []).map((x) => x.replace(/<\/?sitemap>|<\/?loc>/g, "")), ...inlineSitemaps]) {
+    const inlineSitemaps = root.text.match(/https?:\/\/[^"'\s<>]+sitemap[^"'\s<>]*\.xml(?:\.gz)?/gi) || [];
+    for (const s of [
+      ...(sitemapRefs || []).map((x) => x.replace(/<\/?sitemap>|<\/?loc>/g, "")),
+      ...inlineSitemaps,
+      ...extractRobotsSitemaps(robots.ok ? robots.text : ""),
+      ...sitemapCandidates.map((p) => origin + p),
+    ]) {
       addIfNew(s);
     }
-    for (const p of ["/sitemap.xml", "/sitemap_index.xml", "/sitemap.xml.gz", "/sitemap_index.xml.gz"]) {
-      addIfNew(origin + p);
+  } else {
+    // Homepage failed or is a challenge — still seed from robots + common paths.
+    for (const s of [
+      ...extractRobotsSitemaps(robots.ok ? robots.text : ""),
+      ...sitemapCandidates.map((p) => origin + p),
+    ]) {
+      addIfNew(s);
     }
   }
+  const rootBlocked =
+    (!root.ok && (root.status === 403 || root.status === 503)) ||
+    (root.ok && isCloudflareChallenge(root.text));
+
+  // Helper used at the end to decide whether the whole site was unreachable.
+  const hintPasteHtml =
+    "Open a listing page in your browser, press Ctrl+A then Ctrl+C to copy the page source, " +
+    "then switch to 'Paste HTML' mode in the importer.";
 
   // 2. Walk sitemaps (indexes first), classify each sub-sitemap by its filename.
   //    Fetch in parallel, but process breadth-first so indexes resolve before leaves.
@@ -200,7 +213,7 @@ export async function GET(request: NextRequest) {
   }
 
   // 3. If sitemaps yielded nothing, scan the root page HTML for links
-  if (entryMap.size === 0 && root.ok && !expired()) {
+  if (entryMap.size === 0 && root.ok && !isCloudflareChallenge(root.text) && !expired()) {
     const entries = parseListingPage(root.text, origin + "/");
     for (const e of entries) {
       try {
@@ -245,11 +258,41 @@ export async function GET(request: NextRequest) {
   }
 
   // 5. If we still have nothing, fall back to whatever the root page listed
-  if (entryMap.size === 0 && root.ok && !expired()) {
+  if (entryMap.size === 0 && root.ok && !isCloudflareChallenge(root.text) && !expired()) {
     for (const e of parseListingPage(root.text, origin + "/")) {
       try {
         if (isGameUrl(new URL(e.url), origin)) addEntry(e);
       } catch {}
+    }
+  }
+
+  // 6. Nothing found. Only report "protected" when every path failed AND we
+  //    actually saw a Cloudflare interstitial / WAF block — a plain network
+  //    timeout or offline server must not be labelled cloud protected.
+  if (entryMap.size === 0) {
+    if (rootBlocked || (root.ok && isCloudflareChallenge(root.text))) {
+      return NextResponse.json(
+        {
+          error:
+            "This site is protected (Cloudflare or WAF) and blocked automated access. " +
+            "Tried the homepage, robots.txt and sitemaps. " +
+            hintPasteHtml,
+          blocked: true,
+        },
+        { status: 403 }
+      );
+    }
+    if (!root.ok && !robots.ok) {
+      return NextResponse.json(
+        {
+          error:
+            `Could not reach the site (homepage: ${root.error || `HTTP ${root.status}`}; robots.txt: ${
+              robots.error || `HTTP ${robots.status}`
+            }). ` +
+            "Check the URL, or " + hintPasteHtml,
+        },
+        { status: 502 }
+      );
     }
   }
 
