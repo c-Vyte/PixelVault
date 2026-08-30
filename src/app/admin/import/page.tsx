@@ -10,6 +10,8 @@ import { parseListingPage, parseDetailPage, isGenericLinkName, extractNameFromUr
 const SOURCE_PRESETS: { id: string; label: string; url: string; note: string }[] = [
   { id: "repack-games", label: "Repack-games · Games", url: "https://repack-games.com/", note: "Direct file-host links (filekeeper, datanodes, gofile, buzzheavier) — works with site or page mode." },
   { id: "skidrowreloaded", label: "SkidrowReloaded · Games", url: "https://www.skidrowreloaded.com/", note: "Game repacks with direct links (1fichier, gofile, multiup, buzzheavier)." },
+  { id: "elamigos", label: "ElAmigos · Games", url: "https://elamigos.site/", note: "ElAmigos repacks. ~70 newest releases on the homepage (full catalog lives in Admin → External Data). Download links are filecrypt.cc/keeplinks.org pre-captcha containers — stored as repack links." },
+  { id: "gamedrive", label: "GameDrive · Games", url: "https://gamedrive.org/", note: "WordPress repack aggregator (ElAmigos/FitGirl/GameDrive repacks). Covers the whole catalog via sitemap/category crawl. Download links are link-vault.org pre-captcha containers — stored as repack links." },
 ];
 
 const pasteHtmlSamples = `Paste a listing HTML here, e.g.:

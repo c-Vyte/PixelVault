@@ -43,9 +43,12 @@ function isGameUrl(u: URL, origin: string): boolean {
   if (/\.(php|xml|css|js|png|jpg|jpeg|webp|gif|svg|ico|torrent)$/i.test(path)) return false;
   const segments = path.split("/").filter(Boolean);
   if (segments.length < 1 || segments.length > 2) return false;
+  // WordPress-style taxonomy/pagination/asset prefixes are never games, even
+  // with a slug attached (e.g. /category/elamigos-repacks/, /tag/forza-horizon-6/).
+  if (/^(category|categories|tag|tags|author|page|wp-content|wp-includes|wp-json|feed|search|news|shop|contact|about|faq|privacy|terms|downloads?|repacks?)$/i.test(segments[0])) return false;
   const last = segments[segments.length - 1];
   if (last.length < 3 || last.length > 140) return false;
-  if (/^(page|category|categories|tag|author|news|search|home|shop|contact|about|faq|privacy|terms|downloads?|repacks?|all-my-repacks-[a-z-]+|popular-repacks(?:-of-the-year)?|pop-repacks)$/i.test(last)) return false;
+  if (/^(home|all-my-repacks-[a-z-]+|popular-repacks(?:-of-the-year)?|pop-repacks)$/i.test(last)) return false;
   return true;
 }
 

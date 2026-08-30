@@ -10,6 +10,7 @@ const REPACK_DOMAINS = [
   'repack-games.com',
   're-packs.com',
   'elamigos.site',
+  'gamedrive.org',
   'online-fix.me',
   'crackwatch.com',
   'cs.rin.ru',
@@ -118,8 +119,24 @@ export class BrowserFetcher implements Fetcher {
     const siteConfig = getSiteConfig(url);
     const mergedOptions = { ...siteConfig, ...options };
 
-    const context = await this.pool.getContext();
-    const page = await context.newPage();
+    let context: Awaited<ReturnType<BrowserPool['getContext']>> | undefined;
+    let page: Page | undefined;
+    try {
+      context = await this.pool.getContext();
+      page = await context.newPage();
+    } catch (err) {
+      // Playwright browsers not installed (or failed to launch). Return a
+      // structured failure instead of an unhandled rejection (which crashes
+      // the importing request with a 500). DirectHTTPFetcher results still
+      // pass through when the browser is the fallback.
+      if (context) this.pool.releaseContext(context);
+      return {
+        ok: false,
+        text: '',
+        status: 0,
+        error: `browser unavailable: ${err instanceof Error ? err.message.split('\n')[0] : 'launch failed'}`,
+      };
+    }
 
     try {
       // Block resources for speed

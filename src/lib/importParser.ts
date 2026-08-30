@@ -85,6 +85,10 @@ export function extractAnchors(html: string): { text: string; href: string; inde
 export function cleanTitle(text: string): string {
   return decodeEntities(text)
     .replace(/\s+Free Download\s*$/i, "")
+    // Aggregator titles: "Game [Repack] Free Download - SiteName" — cut at the
+    // "Free Download" marker wherever it sits, and drop trailing source tags.
+    .replace(/\s*\[?(?:(?:Free|Direct|Full)\s+)?Download\]?\s*[-–|][^-–|]*$/i, "")
+    .replace(/\s*\[(?:Elamigos|FitGirl|Monkey|GameDrive|Dodi|DODI)[^\]]*Repack\]\s*$/i, "")
     .replace(/\s+Download\s*$/i, "")
     .replace(/\s+(Latest|New) Version\s*$/i, "")
     .replace(/\s+for (Windows|Mac|Android|PC)\s*$/i, "")
@@ -205,7 +209,12 @@ export function absoluteUrl(base: string, href: string): string {
     const u = new URL(href, base);
     // fuckingfast.co (and a few hosts) put the real filename in the fragment,
     // e.g. /11i3cwkyd61j#Game.part1.rar — keep it so link naming/parts work.
-    const hashLooksLikeFile = /^#?.+\.(rar|zip|7z|exe|iso|bin|part|mp4|mkv|apk|dmg|tar|gz)(\b|$)/i.test(u.hash) || /part\d+/i.test(u.hash);
+    // Exception: link-vault.org protector links select the destination hoster
+    // via the fragment (/c/<id>#fuckingfast) — stripping it would collapse
+    // every mirror into one identical URL, so always keep it for that host.
+    const isLinkVault = /link-vault\.org$/i.test(u.hostname);
+    const hashLooksLikeFile = isLinkVault ||
+      /^#?.+\.(rar|zip|7z|exe|iso|bin|part|mp4|mkv|apk|dmg|tar|gz)(\b|$)/i.test(u.hash) || /part\d+/i.test(u.hash);
     if (!hashLooksLikeFile) u.hash = "";
     u.search = "";
     return u.href;
@@ -230,7 +239,7 @@ export function fileNameFromUrlHash(url: string): string {
 }
 
 const FILE_HOSTS =
-  /(mega\.nz|mega\.co\.nz|mega\.io|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org|filecrypt\.cc|keeplinks\.org|protect-link|link-protector)/;
+  /(mega\.nz|mega\.co\.nz|mega\.io|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org|filecrypt\.cc|keeplinks\.org|protect-link|link-protector|link-vault\.org|fileditch\.|vikingfile)/;
 
 export function isDownloadHref(href: string, base: string): boolean {
   if (SKIP_HREF.test(href)) return false;
@@ -267,7 +276,7 @@ export function classifyLinkType(url: string): ParsedLink["type"] {
       // Link protectors (filecrypt.cc / keeplinks.org) gate repack containers
       // behind a captcha — classify them as repack entries, not plain direct
       // downloads, per the "use the link before the captcha" rule.
-      if (/filecrypt|keeplinks/.test(host)) return "repack";
+      if (/filecrypt|keeplinks|link-vault/.test(host)) return "repack";
       return "direct";
     }
     if (/fitgirl|dodi|repack|corepack|xatab|qoob|steamrip|elamigos/.test(host) || /repack/.test(path)) return "repack";
@@ -346,6 +355,9 @@ export function linkDisplayName(url: string): string {
       "www.filecrypt.cc": "FileCrypt",
       "keeplinks.org": "KeepLinks",
       "www.keeplinks.org": "KeepLinks",
+      "link-vault.org": "LinkVault",
+      "fileditch.com": "FileDitch",
+      "vikingfile.com": "VikingFile",
     };
     return known[host] || host.split(".")[0].replace(/^[a-z]/, (c) => c.toUpperCase());
   } catch {
@@ -650,6 +662,15 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
 
     // Smart name resolution: context > url extraction > anchor text > host display
     let name: string;
+    // link-vault.org protector links select the destination hoster via the
+    // fragment (#fileditch / #fuckingfast / ...) — label the link with it.
+    const vaultMatch = /link-vault\.org\/c\/[\w-]+#([a-z0-9]+)/i.exec(abs);
+    if (vaultMatch) {
+      const hostLabel = vaultMatch[1]
+        .replace(/(?:^|[^a-z])([a-z])/g, (m, c, off) => (off === 0 ? c.toUpperCase() : m))
+        .replace(/^[a-z]/, (c) => c.toUpperCase());
+      name = `${hostLabel} (LinkVault)`;
+    } else {
     const anchorIsUrl = /^https?:\/\//i.test(anchorText.trim());
     if (anchorText && !isGenericLinkName(anchorText) && anchorText.length >= 3 && !anchorIsUrl) {
       name = anchorText;
@@ -660,6 +681,7 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
       // the host's display name.
       const urlName = anchorIsUrl ? "" : extractedFromUrl;
       name = contextName || urlName || linkDisplayName(abs);
+    }
     }
     name = name.slice(0, 80) || "Download";
 
