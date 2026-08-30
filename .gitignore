@@ -53,3 +53,6 @@ public/data/xzy-chunks/
 *.log
 data/api-usage.json
 
+
+# Scratch/source pages for offline ElAmigos catalog rebuilds (regenerate via scripts/parse-elamigos.mjs)
+scripts/elamigos-raw/

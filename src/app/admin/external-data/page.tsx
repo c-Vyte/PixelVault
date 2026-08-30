@@ -163,12 +163,35 @@ function toSoftware(item: any, source: string): Software {
         if (links.length > 15) links = links.slice(0, 15);
       }
     }
+  } else if (source === "elamigos" && (Array.isArray(item.downloadLinks) || Array.isArray(item.downloads_links))) {
+    // ElAmigos: one link-protector URL per mirror (DDownload/RapidGator/...).
+    // They are pre-captcha container pages — stored as repack entries.
+    const raw: { name?: unknown; url?: unknown; type?: unknown }[] =
+      Array.isArray(item.downloadLinks) ? item.downloadLinks : item.downloads_links;
+    links = raw
+      .filter((l): l is { name: string; url: string; type?: string } =>
+        !!l && typeof l.url === "string" && l.url.startsWith("http"))
+      .map((l) => ({
+        name: cleanStr(l.name) || "Download",
+        url: l.url,
+        type: ((l.type === "torrent" || l.url.startsWith("magnet:")) ? "torrent" : "repack") as Software["downloadLinks"][0]["type"],
+      }));
   } else if (Array.isArray(item.downloads)) {
     links = item.downloadLinks.map((l: any) => ({
       name: cleanStr(l.name) || "Download",
       url: typeof l.url === "string" ? l.url : "",
       type: (l.type as Software["downloadLinks"][0]["type"]) || "direct",
     }));
+  } else if (Array.isArray(item.downloadLinks)) {
+    // Generic fallback for any other source shipping {name,url,type} links.
+    links = (item.downloadLinks as { name?: unknown; url?: unknown; type?: unknown }[])
+      .filter((l): l is { name?: string; url: string; type?: string } =>
+        !!l && typeof l.url === "string")
+      .map((l) => ({
+        name: cleanStr(l.name) || "Download",
+        url: l.url,
+        type: ((l.type as Software["downloadLinks"][0]["type"]) || "direct"),
+      }));
   } else if (Array.isArray(item._links)) {
     links = item._links.map((url: string, idx: number) => ({
       name: cleanStr(item._names?.[idx]) || "Download",

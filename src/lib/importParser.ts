@@ -46,7 +46,7 @@ export function guessContentType(url: string, title: string): ParsedDetail["cont
 
 const SKIP_PATH = /\.(css|js|json|png|jpe?g|gif|svg|ico|webp|xml|txt|zip|rar)$/i;
 const SKIP_HREF = /^(mailto:|tel:|javascript:|#|data:)/i;
-const NAV_WORDS = /(^|\/)(home|about|contact|login|log-in|signin|sign-up|register|privacy|terms|sitemap|faq|support|blog|news|download-pc-software|category|tags?|tag\/|page|feed|rss|search|advertise|submit|dmca|disclaimer|cookie|help|press|review|reviews|changelog|version-history|request|donate|premium|store|cart|account|profile|forum|community|wp-content|wp-includes|author|date|feedback|discuss|report|lostpassword|static)\b/i;
+const NAV_WORDS = /(^|\/)(home|about|login|log-in|signin|sign-up|register|privacy|terms|sitemap|faq|blog|news|download-pc-software|category|tags?|tag\/|page|feed|rss|search|advertise|submit|dmca|disclaimer|cookie|help|press|review|reviews|changelog|version-history|request|donate|premium|store|cart|account|profile|forum|community|wp-content|wp-includes|author|date|feedback|discuss|report|lostpassword|static)\b/i;
 
 export function decodeEntities(text: string): string {
   return text
@@ -111,7 +111,30 @@ export function extractContextName(html: string, linkIndex: number): string {
   const start = Math.max(0, linkIndex - 2000);
   const before = html.slice(start, linkIndex);
 
-  // Try to find a heading (<h1>-<h6>) that contains the link
+  // Try to find a heading (<h1>-<h6>) that contains the link.
+  // ElAmigos-style: the link is INSIDE the heading (`<h3>Game title <a>DOWNLOAD</a></h3>`),
+  // so the closing tag is not yet present at the anchor position — match an
+  // open heading whose content runs to the end of the window, and strip the
+  // anchor's own text from the extracted heading text.
+  // Last (most recently opened) heading in the window — don't span across a
+  // previous heading's close/open.
+  const lastHeadingOpen = before.lastIndexOf("<h");
+  if (lastHeadingOpen >= 0) {
+    const window_ = before.slice(lastHeadingOpen);
+    const openHeading = /<h[1-6][^>]*>([\s\S]*?)$/i.exec(window_);
+    if (openHeading && !/<h[1-6][^>]*>[\s\S]*<\/h[1-6]>/i.test(openHeading[1])) {
+      let text = decodeEntities(openHeading[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+      // Drop anything that belongs to the link label or a later heading.
+      text = text
+        .replace(/\s*(?:DOWNLOAD|Download|Click here(?: to download)?|Free Download|Download Now)\s*[\s\S]*$/i, "")
+        .trim();
+      // Strip repack-site marker words.
+      text = text.replace(/\s*(?:ElAmigos|FitGirl|DODI(?: Repacks)?|Repacks?)\s*$/i, "").trim();
+      if (text.length >= 3 && text.length <= 140 && !isGenericLinkName(text)) {
+        return stripSiteSuffix(text, "");
+      }
+    }
+  }
   const headingMatch = before.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>\s*$/i);
   if (headingMatch) {
     const text = decodeEntities(headingMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
@@ -207,7 +230,7 @@ export function fileNameFromUrlHash(url: string): string {
 }
 
 const FILE_HOSTS =
-  /(mega\.nz|mega\.co\.nz|mega\.io|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org)/;
+  /(mega\.nz|mega\.co\.nz|mega\.io|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org|filecrypt\.cc|keeplinks\.org|protect-link|link-protector)/;
 
 export function isDownloadHref(href: string, base: string): boolean {
   if (SKIP_HREF.test(href)) return false;
@@ -240,8 +263,14 @@ export function classifyLinkType(url: string): ParsedLink["type"] {
       return "official";
     if (path.endsWith(".torrent") || host.includes("1337x") || host.includes("rutor") || host.includes("piratebay") || host.includes("tapochek") || u.search.includes("do=download"))
       return "torrent";
-    if (FILE_HOSTS.test(host)) return "direct";
-    if (/fitgirl|dodi|repack|corepack|xatab|qoob|steamrip/.test(host) || /repack/.test(path)) return "repack";
+    if (FILE_HOSTS.test(host)) {
+      // Link protectors (filecrypt.cc / keeplinks.org) gate repack containers
+      // behind a captcha — classify them as repack entries, not plain direct
+      // downloads, per the "use the link before the captcha" rule.
+      if (/filecrypt|keeplinks/.test(host)) return "repack";
+      return "direct";
+    }
+    if (/fitgirl|dodi|repack|corepack|xatab|qoob|steamrip|elamigos/.test(host) || /repack/.test(path)) return "repack";
     if (/crack|skidrow|codex|plaza|rutracker/.test(host)) return "cracked";
     return "direct";
   } catch {}
@@ -313,8 +342,12 @@ export function linkDisplayName(url: string): string {
       "alfafile.net": "AlfaFile",
       "dailyuploads.net": "DailyUploads",
       "hexupload.net": "HexUpload",
+      "filecrypt.cc": "FileCrypt",
+      "www.filecrypt.cc": "FileCrypt",
+      "keeplinks.org": "KeepLinks",
+      "www.keeplinks.org": "KeepLinks",
     };
-    return known[host] || host.split(".")[0];
+    return known[host] || host.split(".")[0].replace(/^[a-z]/, (c) => c.toUpperCase());
   } catch {
     return "Download";
   }
@@ -348,7 +381,13 @@ export function extractNameFromUrl(url: string): string {
     if (!filename) return "";
     
     filename = decodeURIComponent(filename);
-    return cleanFilename(filename);
+    const cleaned = cleanFilename(filename);
+    // Code-like slugs (Container IDs, short link keys) aren't real names:
+    // e.g. "B3E16CD4E6" or "6a9072dd17a0a" — fall through to host display.
+    if (/^[a-f0-9]{6,}(?:\s*html?)?$/i.test(cleaned) || cleaned.replace(/\s+/g, "").length <= 4) {
+      return "";
+    }
+    return cleaned;
   } catch {
     return "";
   }
@@ -426,7 +465,7 @@ export function parseListingPage(html: string, url: string): ParsedEntry[] {
   const seen = new Set<string>();
   const entries: ParsedEntry[] = [];
 
-  for (const { text, href } of anchors) {
+  for (const { text, href, index } of anchors) {
     if (SKIP_HREF.test(href)) continue;
     if (text.length < 3 || text.length > 140) continue;
     const abs = absoluteUrl(base, href);
@@ -440,8 +479,17 @@ export function parseListingPage(html: string, url: string): ParsedEntry[] {
       continue;
     }
     if (new RegExp(NAV_WORDS, "i").test(abs)) continue;
-    const cleaned = cleanTitle(text);
+    let cleaned = cleanTitle(text);
     if (cleaned.length < 3) continue;
+    // Listing links whose anchor is "DOWNLOAD" (ElAmigos) / "click here" etc:
+    // the game title comes from the surrounding heading, not the anchor.
+    if (isGenericLinkName(cleaned)) {
+      const contextName = extractContextName(html, index);
+      cleaned = stripSiteSuffix(contextName, "");
+    }
+    // Contact/support/how-to pages aren't entries.
+    if (/(^|\/)(contact|support|how-?to-?download)[-_]|contact[-_].*support/i.test(abs) || /^(ddl|rg|premium|contact|support)\b/i.test(cleaned)) continue;
+    if (cleaned.length < 3 || isGenericLinkName(cleaned)) continue;
     if (seen.has(abs)) continue;
     seen.add(abs);
     entries.push({ title: cleaned, url: abs });
@@ -602,11 +650,16 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
 
     // Smart name resolution: context > url extraction > anchor text > host display
     let name: string;
-    if (anchorText && !isGenericLinkName(anchorText) && anchorText.length >= 3) {
+    const anchorIsUrl = /^https?:\/\//i.test(anchorText.trim());
+    if (anchorText && !isGenericLinkName(anchorText) && anchorText.length >= 3 && !anchorIsUrl) {
       name = anchorText;
     } else {
       const contextName = extractContextName(html, index);
-      name = contextName || extractedFromUrl || linkDisplayName(abs);
+      // When the anchor text is the raw URL itself (ElAmigos/filecrypt style),
+      // a Container-code slug like "B3E16CD4E6 Html" is meaningless — prefer
+      // the host's display name.
+      const urlName = anchorIsUrl ? "" : extractedFromUrl;
+      name = contextName || urlName || linkDisplayName(abs);
     }
     name = name.slice(0, 80) || "Download";
 
