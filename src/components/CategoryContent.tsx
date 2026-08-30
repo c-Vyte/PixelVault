@@ -28,6 +28,9 @@ function sortSoftware(items: Software[], sort: SortOption): Software[] {
 export default function CategoryContent({ slug }: { slug: string }) {
   const searchParams = useSearchParams();
   const initialPage = Number(searchParams.get("page")) || 1;
+  const isPcGames = slug === "pc-games";
+  const ITEMS_PER_PAGE_PC = 20;
+  const itemsPerPage = isPcGames ? ITEMS_PER_PAGE_PC : ITEMS_PER_PAGE;
   const initialSort = (searchParams.get("sort") as SortOption) || "newest";
 
   const [currentPage, setCurrentPage] = useState(initialPage);
@@ -110,11 +113,17 @@ export default function CategoryContent({ slug }: { slug: string }) {
 
   const isAppCompact = slug === "apps" || slug === "android-apps";
 
+  const gridClass = isPcGames
+    ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"
+    : isAppCompact
+      ? "grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3"
+      : "grid grid-cols-1 md:grid-cols-2 gap-4";
+
   const sorted = useMemo(() => sortSoftware(filtered, sortBy), [filtered, sortBy]);
-  const totalPages = Math.ceil(sorted.length / ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(sorted.length / itemsPerPage);
   const paginated = sorted.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
   );
 
   const handlePageChange = (page: number) => {
@@ -254,9 +263,9 @@ export default function CategoryContent({ slug }: { slug: string }) {
 
       {paginated.length > 0 ? (
         <>
-          <div className={isAppCompact ? "grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3" : "grid grid-cols-1 md:grid-cols-2 gap-4"}>
+          <div className={gridClass}>
             {paginated.map((sw) => (
-              <SoftwareCard key={sw.id} software={sw} compact={isAppCompact} />
+              <SoftwareCard key={sw.id} software={sw} compact={isAppCompact || isPcGames} />
             ))}
           </div>
           <Pagination
