@@ -332,6 +332,34 @@ export default function ExternalDataPage() {
           full = data.find((x: any) => x.title === item.title) || item;
         } catch { full = item; }
       }
+      // Auto-enhance ElAmigos games with Grok AI
+      if (activeTab === "elamigos" && full?.title) {
+        try {
+          setAiEnhancing(true);
+          const res = await fetch("/api/ai/enrich", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: [{ title: full.title, description: full.description || "" }] }),
+          });
+          const data = await res.json();
+          const meta = data.results?.[0]?.meta;
+          if (meta && meta.found !== false) {
+            full = {
+              ...full,
+              title: meta.title || full.title,
+              description: meta.description || full.description,
+              originalDescription: meta.description || full.description,
+              features: meta.features?.length ? meta.features : full.features,
+              genres: meta.tags?.length ? meta.tags : full.genres,
+              category: meta.category || full.category,
+              platform: meta.platform || full.platform,
+              _aiEnhanced: true,
+              _aiProvider: data.results[0].provider,
+            };
+          }
+        } catch {}
+        finally { setAiEnhancing(false); }
+      }
       setDetailItem(full);
     } finally {
       setDetailLoading(false);
