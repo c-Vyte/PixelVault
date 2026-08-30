@@ -1,162 +1,228 @@
 "use client";
 
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useTheme } from "@/components/ThemeProvider";
-import BrandLogo from "@/components/BrandLogo";
-import { defaultSiteContent, readSiteContent, type SiteContent } from "@/lib/siteContent";
+import { usePathname, useRouter } from "next/navigation";
+import { SearchIcon, ShieldLockIcon, PaletteIcon } from "./icons";
+import { getSoftwareList, Software } from "@/lib/data";
+import { useThemeAndToast, THEME_PRESETS } from "./ThemeAndToastProvider";
 
-export default function Header() {
+export function Header() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { themeId, setThemeId } = useThemeAndToast();
+  const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { theme, toggleTheme } = useTheme();
-  const [content, setContent] = useState<SiteContent>(defaultSiteContent);
+  const [searchResults, setSearchResults] = useState<Software[]>([]);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [allSoftware, setAllSoftware] = useState<Software[]>([]);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const loadContent = () => setContent(readSiteContent());
-    loadContent();
-    window.addEventListener("site-content-changed", loadContent);
-    return () => window.removeEventListener("site-content-changed", loadContent);
+    const load = () =>
+      getSoftwareList().then((list) =>
+        setAllSoftware(list.filter((item) => item.status === "published"))
+      );
+    load();
+    const handleDataChange = load;
+    window.addEventListener("software-data-changed", handleDataChange);
+    return () => window.removeEventListener("software-data-changed", handleDataChange);
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSearchOpen((prev) => !prev);
+      }
+      if (e.key === "Escape") {
+        setSearchOpen(false);
+        setThemeMenuOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, [searchOpen]);
+
+  useEffect(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      setSearchResults(allSoftware.slice(0, 7));
+      return;
+    }
+    setSearchResults(
+      allSoftware
+        .filter(
+          (item) =>
+            item.title.toLowerCase().includes(q) ||
+            item.subcategory.toLowerCase().includes(q) ||
+            item.category.toLowerCase().includes(q) ||
+            item.features.some((f) => f.toLowerCase().includes(q))
+        )
+        .slice(0, 9)
+    );
+  }, [searchQuery, allSoftware]);
+
   const navLinks = [
-    { label: content.navigation.games, href: "/category/pc-games" },
-    { label: content.navigation.software, href: "/category/windows" },
-    { label: content.navigation.ebooks, href: "/category/ebooks" },
-    { label: content.navigation.pcCheck, href: "/pc-check" },
-    { label: content.navigation.faq, href: "/faq" },
-    { label: content.navigation.contact, href: "/contact" },
-    { label: "Speedtest", href: "/speedtest" },
+    { href: "/pc-games", label: "Games" },
+    { href: "/windows", label: "Software" },
+    { href: "/ebooks", label: "Ebooks" },
+    { href: "/movies", label: "PC Check" },
   ];
 
+  const currentTheme = THEME_PRESETS.find((t) => t.id === themeId) || THEME_PRESETS[0];
+
   return (
-    <header className="reference-header sticky top-0 z-50 backdrop-blur-sm border-b">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
-          <BrandLogo href="/" className="group transition-transform hover:-translate-y-0.5" />
-
-          <nav className="hidden items-center gap-6 lg:flex" aria-label="Primary navigation">
-            {navLinks.slice(0, 4).map((link) => (
-              <Link
-                key={link.label}
-                href={link.href}
-                className="text-xs font-bold uppercase tracking-[0.14em] text-gray-500 transition-colors hover:text-amber-400"
-              >
-                {link.label}
-              </Link>
-            ))}
-          </nav>
-
-          {/* Right side */}
-          <div className="flex items-center gap-3">
-            <Link
-              href="/pc-check"
-              className="hidden rounded-lg border border-amber-500/30 px-3 py-2 text-xs font-bold uppercase tracking-wider text-amber-400 transition-colors hover:bg-amber-500/10 md:block"
-            >
-              {content.navigation.pcCheckCta}
+    <>
+      <header className="site-header sticky top-0 z-40 w-full border-b backdrop-blur-md">
+        <div className="mx-auto flex h-12 max-w-[1440px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-5">
+            <Link href="/" className="group flex items-center gap-2 cursor-pointer">
+              <div className="site-primary-bg flex h-7 w-7 items-center justify-center rounded-lg text-[13px] font-black transition-transform group-hover:scale-105">
+                P
+              </div>
+              <span className="site-text font-mono text-[11px] font-black uppercase tracking-[0.24em]">
+                PixelVault
+              </span>
             </Link>
-            {/* Search - desktop */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (searchQuery.trim()) {
-                  window.location.href = `/search?q=${encodeURIComponent(searchQuery)}`;
-                }
-              }}
-              className="hidden md:flex items-center bg-gray-900 rounded-lg border border-gray-800 focus-within:border-amber-500 transition-colors"
+
+            <nav className="hidden items-center gap-5 md:flex">
+              {navLinks.map((link) => {
+                const active = pathname === link.href;
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    className={`font-mono text-[10px] font-bold uppercase tracking-[0.22em] transition-colors ${
+                      active ? "site-primary-text" : "site-nav site-muted"
+                    }`}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Link
+              href="/admin"
+              className="site-theme-button site-card-elevated site-primary-border site-text hidden rounded-md border px-3 py-1.5 font-mono text-[9px] font-black uppercase tracking-[0.16em] transition-colors sm:inline-flex"
             >
-              <input
-                type="text"
-                placeholder={content.navigation.searchPlaceholder}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-transparent text-white text-xs px-4 py-2 w-44 focus:outline-none placeholder-gray-600 font-mono"
-              />
+              Find my games
+            </Link>
+
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="site-theme-control site-card-elevated site-card-border site-muted flex h-8 w-36 items-center justify-between rounded-md border px-2.5 font-mono text-[10px] transition-all sm:w-48 cursor-pointer"
+            >
+              <span className="truncate">Search...</span>
+              <SearchIcon className="site-primary-text h-3.5 w-3.5" />
+            </button>
+
+            <div className="relative">
               <button
-                type="submit"
-                className="px-3 py-2 text-gray-500 hover:text-amber-500 transition-colors"
+                onClick={() => setThemeMenuOpen((prev) => !prev)}
+                className="site-theme-control site-card-elevated site-card-border site-primary-text flex h-8 w-8 items-center justify-center rounded-md border transition-colors cursor-pointer"
+                title="Theme presets"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
+                <PaletteIcon className="h-4 w-4" />
               </button>
-            </form>
-
-            {/* Theme toggle */}
-            <button
-              onClick={toggleTheme}
-              className="p-2 text-gray-500 hover:text-white rounded-lg hover:bg-gray-900 transition-colors"
-            >
-              {theme === "dark" ? (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                </svg>
+              {themeMenuOpen && (
+                <div className="site-card absolute right-0 mt-2 w-72 rounded-xl border p-3 shadow-2xl">
+                  <div className="site-card-border mb-2 flex items-center justify-between border-b pb-2">
+                    <span className="site-text font-mono text-[10px] font-black uppercase tracking-[0.18em]">
+                      Theme presets
+                    </span>
+                    <span className="site-primary-text font-mono text-[9px]">{currentTheme.mode}</span>
+                  </div>
+                  <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                    {THEME_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        onClick={() => {
+                          setThemeId(preset.id);
+                          setThemeMenuOpen(false);
+                        }}
+                        className={`theme-preset-row flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer ${
+                          preset.id === themeId
+                            ? "is-active site-primary-border site-card-elevated site-text border"
+                            : "site-muted"
+                        }`}
+                      >
+                        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.12em]">
+                          {preset.name}
+                        </span>
+                        <span className="flex gap-1">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: preset.primary }} />
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: preset.accent }} />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
-            </button>
+            </div>
 
-            {/* Hamburger - mobile */}
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="lg:hidden text-gray-400 hover:text-white p-2"
+            <Link
+              href="/admin"
+              className="site-theme-control site-card-elevated site-card-border site-muted flex h-8 w-8 items-center justify-center rounded-md border transition-colors sm:hidden"
+              title="Admin"
             >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {mobileMenuOpen ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                )}
-              </svg>
-            </button>
+              <ShieldLockIcon className="h-4 w-4" />
+            </Link>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* Mobile menu */}
-      {mobileMenuOpen && (
-        <div className="lg:hidden bg-gray-950 border-t border-gray-800">
-          <div className="px-4 py-4 space-y-3">
-            {/* Mobile search */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (searchQuery.trim()) {
-                  setMobileMenuOpen(false);
-                  window.location.href = `/search?q=${encodeURIComponent(searchQuery)}`;
-                }
-              }}
-              className="flex items-center bg-gray-900 rounded-lg"
-            >
+      {searchOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 px-4 pt-16 backdrop-blur-md sm:pt-24">
+          <div className="site-card site-primary-border w-full max-w-2xl overflow-hidden rounded-2xl border shadow-2xl">
+            <div className="site-card-elevated site-card-border flex items-center gap-3 border-b px-4 py-3.5">
+              <SearchIcon className="site-primary-text h-5 w-5 shrink-0" />
               <input
+                ref={searchInputRef}
                 type="text"
-                placeholder="Search software..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-transparent text-white text-sm px-4 py-3 flex-1 focus:outline-none placeholder-gray-600"
+                placeholder="Search games, apps, movies, ebooks..."
+                className="site-text w-full bg-transparent text-sm placeholder:text-[var(--muted)] focus:outline-none"
               />
-              <button type="submit" className="px-4 py-3 text-gray-500 hover:text-red-500">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              </button>
-            </form>
-            {/* Mobile nav links */}
-            {navLinks.map((link) => (
-              <Link
-                key={link.label}
-                href={link.href}
-                className="block text-gray-400 hover:text-white py-2 text-sm font-bold uppercase tracking-[0.15em]"
-                onClick={() => setMobileMenuOpen(false)}
+              <button
+                onClick={() => setSearchOpen(false)}
+                className="site-card-elevated site-muted rounded px-2 py-1 font-mono text-[10px] cursor-pointer"
               >
-                {link.label}
-              </Link>
-            ))}
+                ESC
+              </button>
+            </div>
+            <div className="max-h-[60vh] space-y-2 overflow-y-auto p-3">
+              {searchResults.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setSearchOpen(false);
+                    router.push(`/software/${item.id}`);
+                  }}
+                  className="site-card group flex w-full items-center justify-between gap-3 rounded-xl border p-2.5 text-left transition-all cursor-pointer"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <img src={item.icon} alt={item.title} className="h-11 w-11 shrink-0 rounded-lg border border-[#2f2850] object-cover" />
+                    <div className="min-w-0">
+                      <h4 className="truncate text-sm font-bold text-white group-hover:text-[#b19cff]">{item.title}</h4>
+                      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">{item.category} / {item.size}</p>
+                    </div>
+                  </div>
+                  <span className="site-primary-text font-mono text-[10px] font-bold uppercase">View</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
-    </header>
+    </>
   );
 }

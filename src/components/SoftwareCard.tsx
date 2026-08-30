@@ -1,147 +1,107 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
 import { Software } from "@/lib/data";
+import { AppleMacIcon, DownloadIcon, StarIcon, WindowsIcon, SmartphoneIcon } from "./icons";
 
-function formatDownloads(num: number): string {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + "M";
-  }
-  if (num >= 1000) {
-    return (num / 1000).toFixed(1) + "K";
-  }
-  return num.toString();
-}
-
-function getLinkTypeClass(type: "official" | "repack" | "direct" | "cracked" | "torrent"): string {
+export function getLinkTypeColor(type: string) {
   switch (type) {
-    case "official":
-      return "bg-blue-600 text-white";
     case "repack":
-      return "bg-amber-600 text-white";
-    case "direct":
-      return "bg-green-600 text-white";
+      return "site-primary-bg site-primary-border";
     case "torrent":
-      return "bg-emerald-600 text-white";
+      return "bg-amber-500 text-slate-950 border-amber-300";
+    case "official":
+      return "bg-emerald-500 text-slate-950 border-emerald-300";
     case "cracked":
-      return "bg-red-600 text-white";
+      return "bg-red-500 text-white border-red-300";
     default:
-      return "bg-gray-600 text-white";
+      return "site-primary-bg site-primary-border";
   }
 }
 
-export default function SoftwareCard({ software, compact }: { software: Software; compact?: boolean }) {
-  // Get unique download link types
-  const linkTypes = [...new Set(software.downloadLinks.map(link => link.type))];
-  // Check if software has repack links
-  const hasRepack = software.downloadLinks.some(link => link.type === "repack");
-   
-  if (compact) {
+export function PlatformBadge({ platform }: { platform: string }) {
+  if (platform === "mac") {
     return (
-      <Link href={`/software/${software.id}`} className="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-amber-500/50 transition-all">
-        <div className="relative h-44 sm:h-48 overflow-hidden bg-gray-900">
-          {software.icon || software.poster ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={software.icon || software.poster} alt={software.title} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-gray-800 text-gray-600 text-[10px] uppercase">No Image</div>
-          )}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-          <div className="absolute bottom-0 left-0 right-0 p-2 translate-y-full group-hover:translate-y-0 transition-transform bg-black/70 backdrop-blur-sm">
-            <h3 className="text-white font-bold text-xs line-clamp-2 leading-tight" title={software.title}>{software.title}</h3>
-          </div>
-          <div className="absolute top-1.5 left-1.5 flex gap-1">
-            {linkTypes.slice(0,1).map((type, i) => (
-              <span key={i} className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${getLinkTypeClass(type as any)}`}>{type.toUpperCase()}</span>
-            ))}
-          </div>
-        </div>
-      </Link>
+      <span className="inline-flex items-center gap-1 rounded bg-[#16102c] px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.12em] text-slate-300 ring-1 ring-[#2c2450]">
+        <AppleMacIcon className="h-3 w-3" /> macOS
+      </span>
     );
   }
-
+  if (platform === "android" || platform === "ios") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded bg-[#16102c] px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.12em] text-slate-300 ring-1 ring-[#2c2450]">
+        <SmartphoneIcon className="h-3 w-3" /> Mobile
+      </span>
+    );
+  }
+  if (platform === "cross-platform") {
+    return (
+      <span className="inline-flex items-center rounded bg-[#16102c] px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[#b19cff] ring-1 ring-[#2c2450]">
+        Multi
+      </span>
+    );
+  }
   return (
-    <Link
-      href={`/software/${software.id}`}
-      className="group block gaming-card rounded-xl overflow-hidden"
-    >
-      {/* Image section */}
-      <div className="relative h-64 overflow-hidden bg-gray-900">
-        {software.icon || software.poster ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={software.icon || software.poster}
-            alt={software.title}
-            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-gray-800 text-gray-600 text-xs">No Image</div>
-        )}
-        {/* Gradient overlay */}
-        <div className="absolute inset-0 bg-gradient-to-t from-gray-950 via-gray-950/40 to-transparent" />
-        
-        {/* Red accent line at bottom */}
-        <div className="absolute bottom-0 left-0 right-0 h-1 bg-amber-500 transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left" />
-        
-        {/* Download link type badges */}
-        <div className="absolute top-3 left-3 flex flex-wrap gap-1">
-          {linkTypes.map((type, index) => (
-            <span key={index} className={`px-2 py-0.5 text-xs font-bold rounded ${getLinkTypeClass(type as "official" | "repack" | "direct" | "cracked" | "torrent")}`}>
-              {type.toUpperCase()}
-            </span>
-          ))}
-        </div>
-        
-        {/* Repack indicator */}
-        {hasRepack && (
-          <div className="absolute top-3 right-3">
-            <span className="px-2 py-0.5 text-xs font-bold bg-amber-600 text-white rounded">
-              REPACK
-            </span>
-          </div>
-        )}
-        
-        {/* Title overlay */}
-        <div className="absolute bottom-0 left-0 right-0 p-4">
-          <h3 className="text-white font-bold text-base line-clamp-1 uppercase tracking-wide">
-            {software.title}
-          </h3>
-        </div>
-        
-        {/* Platform badge */}
-        <div className="absolute top-3 right-3">
-          <span className="px-2.5 py-1 bg-amber-600 text-white text-xs font-bold uppercase rounded">
-            {software.platform}
-          </span>
-        </div>
-      </div>
-
-      {/* Info section */}
-      <div className="p-4">
-        <p className="text-gray-400 text-xs line-clamp-2 mb-4 leading-relaxed">
-          {software.description}
-        </p>
-
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 text-xs text-gray-500">
-            <span className="flex items-center gap-1">
-              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
-              </svg>
-              {formatDownloads(software.downloads)}
-            </span>
-            <span className="text-gray-600">•</span>
-            <span>{software.size}</span>
-          </div>
-          <span className="text-xs font-semibold text-amber-500 uppercase tracking-wider group-hover:translate-x-1 transition-transform inline-flex items-center gap-1">
-            View
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </span>
-        </div>
-      </div>
-    </Link>
+    <span className="site-primary-bg inline-flex items-center gap-1 rounded px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.12em]">
+      <WindowsIcon className="h-3 w-3" /> Windows
+    </span>
   );
 }
+
+export function SoftwareCard({
+  item: itemProp,
+  software,
+  onQuickDownload,
+  compact,
+}: {
+  item?: Software;
+  software?: Software;
+  onQuickDownload?: (item: Software) => void;
+  compact?: boolean;
+}) {
+  const item = itemProp || software!;
+  const primaryLinkType = item.downloadLinks[0]?.type || "direct";
+
+  return (
+    <article className="site-card group overflow-hidden rounded-xl border shadow-md transition-all duration-200 hover:-translate-y-1">
+      <Link href={`/software/${item.id}`} className="site-card-elevated relative block aspect-[1.35] overflow-hidden">
+        <img src={item.icon} alt={item.title} className="h-full w-full object-cover opacity-90 transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#080511] via-[#080511]/15 to-transparent" />
+        <div className="absolute left-3 top-3 flex items-center gap-1.5">
+          <span className={`rounded border px-2 py-0.5 font-mono text-[8px] font-black uppercase tracking-[0.14em] ${getLinkTypeColor(primaryLinkType)}`}>{primaryLinkType}</span>
+          <PlatformBadge platform={item.platform} />
+        </div>
+        <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between gap-3">
+          <h3 className="media-overlay-text line-clamp-2 max-w-[78%] text-sm font-black leading-tight drop-shadow">
+            {item.title}
+          </h3>
+          <span className="media-overlay-text rounded bg-black/55 px-2 py-1 font-mono text-[9px] font-bold backdrop-blur">
+            {item.size}
+          </span>
+        </div>
+      </Link>
+
+      <div className="p-4">
+        <p className="site-muted line-clamp-2 min-h-9 text-xs leading-5">{item.description}</p>
+        <div className="site-card-border mt-4 flex items-center justify-between border-t pt-3">
+          <div className="site-muted flex items-center gap-3 font-mono text-[10px]">
+            <span className="site-accent-text inline-flex items-center gap-1"><StarIcon className="h-3.5 w-3.5" filled /> {item.rating.toFixed(1)}</span>
+            <span>{(item.downloads || 0).toLocaleString()} DLs</span>
+          </div>
+          {onQuickDownload ? (
+            <button onClick={() => onQuickDownload(item)} className="site-primary-text font-mono text-[10px] font-black uppercase tracking-[0.14em] hover:opacity-70 cursor-pointer">
+              View
+            </button>
+          ) : (
+            <Link href={`/software/${item.id}`} className="site-primary-text font-mono text-[10px] font-black uppercase tracking-[0.14em] hover:opacity-70">
+              View
+            </Link>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export default SoftwareCard;
