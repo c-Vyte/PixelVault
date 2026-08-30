@@ -10,11 +10,7 @@ export default function AdminLayout({
   return (
     <AuthProvider>
       <ToastProvider>
-        <AdminGuard>
-          <div className="admin-console min-h-screen bg-[#0a0f1a]">
-            {children}
-          </div>
-        </AdminGuard>
+        <AdminGuard>{children}</AdminGuard>
       </ToastProvider>
     </AuthProvider>
   );

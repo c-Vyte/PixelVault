@@ -92,7 +92,7 @@ const navItems = [
   },
 ];
 
-export default function AdminSidebar() {
+export default function AdminSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { logout } = useAuth();
   const [pendingReports, setPendingReports] = useState(0);
@@ -107,21 +107,21 @@ export default function AdminSidebar() {
   }, []);
 
   return (
-    <aside className="w-64 bg-[#0c1222] border-r border-blue-900/50 min-h-screen flex flex-col">
+    <aside className="w-64 bg-[#0c1222] border-r border-blue-900/50 h-screen md:sticky md:top-0 flex flex-col overflow-y-auto">
       {/* Logo */}
-      <div className="p-6 border-b border-blue-900/50">
-        <Link href="/admin" className="flex items-center gap-3">
+      <div className="p-6 border-b border-blue-900/50 shrink-0">
+        <Link href="/admin" className="flex items-center gap-3" onClick={onNavigate}>
           <BrandLogo showName={false} compact />
           <div>
-            <span className="text-lg font-black text-white tracking-wider uppercase">Admin</span>
-            <p className="text-blue-400/60 text-xs">Management Panel</p>
+            <span className="block font-black text-white tracking-wider uppercase leading-tight">Admin</span>
+            <p className="text-blue-400/60">Management Panel</p>
           </div>
         </Link>
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 px-4 py-6">
-        <p className="text-blue-400/40 text-xs font-bold uppercase tracking-widest px-4 mb-3">Menu</p>
+        <p className="text-blue-400/40 font-bold uppercase tracking-widest px-4 mb-3">Menu</p>
         <ul className="space-y-1">
           {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href));
@@ -129,14 +129,15 @@ export default function AdminSidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all ${
+                  onClick={onNavigate}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg font-semibold transition-all ${
                     isActive
                       ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
                       : "text-blue-300/60 hover:text-white hover:bg-blue-900/30"
                   }`}
                 >
                   <span className="flex-shrink-0">{item.icon}</span>
-                  <span className="uppercase tracking-wider text-xs">{item.label}</span>
+                  <span className="uppercase tracking-wider whitespace-nowrap">{item.label}</span>
                   {item.href === "/admin/reports" && pendingReports > 0 && (
                     <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
                       {pendingReports}
@@ -153,24 +154,25 @@ export default function AdminSidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="px-4 pb-6 border-t border-blue-900/50 pt-4 space-y-1">
+      <div className="px-4 pb-6 border-t border-blue-900/50 pt-4 space-y-1 shrink-0">
         <Link
           href="/"
-          className="flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold text-blue-300/60 hover:text-white hover:bg-blue-900/30 transition-colors"
+          onClick={onNavigate}
+          className="flex items-center gap-3 px-4 py-3 rounded-lg font-semibold text-blue-300/60 hover:text-white hover:bg-blue-900/30 transition-colors"
         >
           <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
           </svg>
-          <span className="uppercase tracking-wider text-xs">View Site</span>
+          <span className="uppercase tracking-wider whitespace-nowrap">View Site</span>
         </Link>
         <button
-          onClick={logout}
-          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold text-blue-300/60 hover:text-red-400 hover:bg-blue-900/30 transition-colors"
+          onClick={() => { onNavigate?.(); logout(); }}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg font-semibold text-blue-300/60 hover:text-red-400 hover:bg-blue-900/30 transition-colors"
         >
           <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
           </svg>
-          <span className="uppercase tracking-wider text-xs">Sign Out</span>
+          <span className="uppercase tracking-wider whitespace-nowrap">Sign Out</span>
         </button>
       </div>
     </aside>

@@ -79,6 +79,15 @@ body {
 .admin-console textarea,
 .admin-console button { font-size: 0.78rem; letter-spacing: 0; }
 
+/* Long URLs / wide tables shouldn't blow out the flex column on mobile. */
+.admin-console main { overflow-wrap: break-word; word-break: break-word; }
+
+/* Mobile sidebar drawer animation */
+@keyframes slidein {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
 :root {
   --glow-1: rgba(124, 58, 237, 0.22);
   --glow-2: rgba(244, 63, 94, 0.1);
