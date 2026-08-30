@@ -238,6 +238,27 @@ export default function AdminSoftware() {
     }
   };
 
+  const handleBulkPublish = async () => {
+    const ids = Array.from(selectedIds);
+    const pendingIds = ids.filter((id) => softwareList.find((s) => s.id === id)?.status === "pending");
+    if (pendingIds.length === 0) { alert("No pending selected to publish."); return; }
+    await updateSoftwareStatus(pendingIds, "published");
+    const updated = await getSoftwareList();
+    setSoftwareList(updated);
+    setSelectedIds(new Set());
+    window.dispatchEvent(new Event("software-data-changed"));
+  };
+
+  const handlePublishAllPending = async () => {
+    const pendingIds = softwareList.filter((s) => s.status === "pending").map((s) => s.id);
+    if (pendingIds.length === 0) { alert("No pending games."); return; }
+    if (!confirm(`Publish ${pendingIds.length} pending games to client?`)) return;
+    await updateSoftwareStatus(pendingIds, "published");
+    const updated = await getSoftwareList();
+    setSoftwareList(updated);
+    window.dispatchEvent(new Event("software-data-changed"));
+  };
+
   const handleDelete = (id: string) => {
     if (confirm("Are you sure you want to delete this software?")) {
       persistSoftware(softwareList.filter((sw) => sw.id !== id));
@@ -288,14 +309,24 @@ export default function AdminSoftware() {
         </div>
         <div className="flex gap-1.5 items-center flex-wrap">
           {selectedIds.size > 0 && (
-            <button
-              onClick={handleBulkDelete}
-              title={`Delete ${selectedIds.size} selected`}
-              className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-              <span className="text-xs font-bold">Delete ({selectedIds.size})</span>
-            </button>
+            <>
+              <button
+                onClick={handleBulkPublish}
+                title={`Publish ${selectedIds.size} selected to client`}
+                className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                <span className="text-xs font-bold">Publish ({selectedIds.size})</span>
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                title={`Delete ${selectedIds.size} selected`}
+                className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                <span className="text-xs font-bold">Delete ({selectedIds.size})</span>
+              </button>
+            </>
           )}
           <button
             onClick={checkAllLinks}
@@ -604,6 +635,14 @@ export default function AdminSoftware() {
               Archive Selected
             </button>
           </>
+        )}
+        {statusFilter === "pending" && statusCounts.pending > 0 && selectedIds.size === 0 && (
+          <button
+            onClick={handlePublishAllPending}
+            className="ml-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider text-sm transition-colors"
+          >
+            Publish All Pending ({statusCounts.pending.toLocaleString()})
+          </button>
         )}
         {statusFilter === "archived" && selectedIds.size > 0 && (
           <button
