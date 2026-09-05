@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: pixelvault
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /app/data
+      - key: BROWSER_MAX_CONTEXTS
+        value: 1
+      - key: BROWSER_IDLE_MS
+        value: 300000
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: TOTP_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: RAWG_API_KEY
+        sync: false
+    disk:
+      name: pixelvault_data
+      mountPath: /app/data
+      sizeGB: 1
