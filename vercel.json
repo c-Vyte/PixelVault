@@ -4,7 +4,8 @@
   "installCommand": "npm ci",
   "functions": {
     "src/app/api/import/**": { "maxDuration": 60 },
-    "src/app/api/ai/**": { "maxDuration": 60 }
+    "src/app/api/ai/**": { "maxDuration": 60 },
+    "src/app/api/software/**": { "maxDuration": 10 }
   },
   "regions": ["iad1"]
 }
