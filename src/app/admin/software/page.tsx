@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { categories, type Software, clearSoftwareStorage, getStorageInfo, updateSoftwareStatus, getSoftwareList } from "@/lib/data";
+import { categories, type Software, clearSoftwareStorage, getStorageInfo, updateSoftwareStatus, getSoftwareList, saveSoftwareList } from "@/lib/data";
 
 export default function AdminSoftware() {
   const [search, setSearch] = useState("");
@@ -40,7 +40,7 @@ export default function AdminSoftware() {
     window.dispatchEvent(new Event("software-data-changed"));
   };
 
-  const cleanObjectObject = () => {
+  const cleanObjectObject = async () => {
     const clean = (val: any): string => {
       if (typeof val === "string") return val.replace(/\[object Object\],?/g, "").trim();
       return "";
@@ -60,7 +60,7 @@ export default function AdminSoftware() {
         url: l.url && typeof l.url === "string" ? l.url : "",
       })),
     }));
-    persistSoftware(updated);
+    await persistSoftware(updated);
     alert(`Cleaned [object Object] from ${updated.length} entries.`);
   };
 
@@ -104,7 +104,7 @@ export default function AdminSoftware() {
       setCheckProgress(Math.min(i + BATCH_SIZE, allUrls.length));
       setSoftwareList(JSON.parse(JSON.stringify(updated)));
     }
-    persistSoftware(updated);
+    await persistSoftware(updated);
     setChecking(false);
   };
 
@@ -175,7 +175,7 @@ export default function AdminSoftware() {
     return Array.from(m.entries()).filter(([, arr]) => arr.length > 1).map(([k, arr]) => ({ key: k, items: arr }));
   })();
 
-  const mergeGroup = (group: Software[]) => {
+  const mergeGroup = async (group: Software[]) => {
     if (group.length < 2) return;
     if (!confirm(`Merge ${group.length} similar entries "${group[0].title}"? Keeps healthiest as base.`)) return;
     const byHealth = [...group].sort((a,b) => {
@@ -199,10 +199,10 @@ export default function AdminSoftware() {
     const keepId = base.id;
     const otherIds = new Set(others.map(s=>s.id));
     const final = softwareList.filter(sw => !otherIds.has(sw.id)).map(sw=> sw.id===keepId ? merged : sw);
-    persistSoftware(final);
+    await persistSoftware(final);
   };
 
-  const deleteUnhealthyInGroup = (group: Software[]) => {
+  const deleteUnhealthyInGroup = async (group: Software[]) => {
     const unhealthy = group.filter(sw => {
       const h = getLinkHealth(sw);
       return !h || h.alive===0;
@@ -210,7 +210,7 @@ export default function AdminSoftware() {
     if (unhealthy.length===0) { alert("No unhealthy entries in this group."); return; }
     if (!confirm(`Delete ${unhealthy.length} unhealthy entr${unhealthy.length===1?"y":"ies"} from similar group "${group[0].title}"?`)) return;
     const ids = new Set(unhealthy.map(s=>s.id));
-    persistSoftware(softwareList.filter(sw=> !ids.has(sw.id)));
+    await persistSoftware(softwareList.filter(sw=> !ids.has(sw.id)));
   };
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -228,11 +228,11 @@ export default function AdminSoftware() {
     else setSelectedIds(new Set(paginated.map((sw) => sw.id)));
   };
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
     if (confirm(`Delete ${selectedIds.size} selected software entr${selectedIds.size === 1 ? "y" : "ies"}? This cannot be undone.`)) {
       const updated = softwareList.filter((sw) => !selectedIds.has(sw.id));
-      persistSoftware(updated);
+      await persistSoftware(updated);
       setSelectedIds(new Set());
       setCurrentPage(1);
     }
@@ -259,13 +259,13 @@ export default function AdminSoftware() {
     window.dispatchEvent(new Event("software-data-changed"));
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm("Are you sure you want to delete this software?")) {
-      persistSoftware(softwareList.filter((sw) => sw.id !== id));
+      await persistSoftware(softwareList.filter((sw) => sw.id !== id));
     }
   };
 
-  const removeRepacksEntries = () => {
+  const removeRepacksEntries = async () => {
     const targets = softwareList.filter((sw) =>
       (sw.downloadLinks || []).some((l) => l.url && l.url.includes("repacks-games.com"))
     );
@@ -274,12 +274,12 @@ export default function AdminSoftware() {
       return;
     }
     if (confirm(`Remove ${targets.length} entr${targets.length === 1 ? "y" : "ies"} from repacks-games.com?`)) {
-      persistSoftware(softwareList.filter((sw) => !targets.includes(sw)));
+      await persistSoftware(softwareList.filter((sw) => !targets.includes(sw)));
       setSelectedIds(new Set());
     }
   };
 
-  const removeNoLinksEntries = () => {
+  const removeNoLinksEntries = async () => {
     const noLinks = softwareList.filter((sw) =>
       !sw.downloadLinks || sw.downloadLinks.length === 0 ||
       sw.downloadLinks.every((l) => !l.url || l.url.trim() === "")
@@ -290,7 +290,7 @@ export default function AdminSoftware() {
     }
     if (confirm(`Remove ${noLinks.length} entries with no download links? This cannot be undone.`)) {
       const idsToRemove = new Set(noLinks.map((sw) => sw.id));
-      persistSoftware(softwareList.filter((sw) => !idsToRemove.has(sw.id)));
+      await persistSoftware(softwareList.filter((sw) => !idsToRemove.has(sw.id)));
       setSelectedIds(new Set());
     }
   };
@@ -377,12 +377,12 @@ export default function AdminSoftware() {
             <span className="text-xs font-bold">Clear Storage</span>
           </button>
           <button
-            onClick={() => {
+            onClick={async () => {
               const appCats = ["windows","mac","android","ebooks","tutorials"];
               const apps = softwareList.filter(s => appCats.includes(s.category));
               if (apps.length === 0) { alert("No applications found."); return; }
               if (!confirm(`Delete ${apps.length} application entries (windows/mac/android/ebooks/tutorials)? This will keep pc-games/movies.`)) return;
-              persistSoftware(softwareList.filter(s => !appCats.includes(s.category)));
+              await persistSoftware(softwareList.filter(s => !appCats.includes(s.category)));
             }}
             title="Clear all applications"
             className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg bg-red-800 hover:bg-red-700 text-red-200 border border-red-700 transition-colors"

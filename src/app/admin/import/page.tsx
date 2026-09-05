@@ -1,18 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { categories, getSoftwareList, type Software } from "@/lib/data";
+import { useRef, useState, useEffect } from "react";
+import { categories, getSoftwareList, saveSoftwareList, type Software } from "@/lib/data";
 import { parseListingPage, parseDetailPage, isGenericLinkName, extractNameFromUrl, type ParsedEntry as ParsedEntryType, type ParsedDetail } from "@/lib/importParser";
+import { TUNABLES } from "@/lib/config";
+import { SOURCE_PRESETS } from "@/components/admin/import/presets";
 
-// Verified reachable sources that parse cleanly with the current import parser.
-// oceanofgames / downloadpirate are excluded: their detail links are JS-rendered
-// or category-structured and yield no download links.
-const SOURCE_PRESETS: { id: string; label: string; url: string; note: string }[] = [
-  { id: "repack-games", label: "Repack-games · Games", url: "https://repack-games.com/", note: "Direct file-host links (filekeeper, datanodes, gofile, buzzheavier) — works with site or page mode." },
-  { id: "skidrowreloaded", label: "SkidrowReloaded · Games", url: "https://www.skidrowreloaded.com/", note: "Game repacks with direct links (1fichier, gofile, multiup, buzzheavier)." },
-  { id: "elamigos", label: "ElAmigos · Games", url: "https://elamigos.site/", note: "ElAmigos repacks. ~70 newest releases on the homepage (full catalog lives in Admin → External Data). Download links are filecrypt.cc/keeplinks.org pre-captcha containers — stored as repack links." },
-  { id: "gamedrive", label: "GameDrive · Games", url: "https://gamedrive.org/", note: "WordPress repack aggregator (ElAmigos/FitGirl/GameDrive repacks). Covers the whole catalog via sitemap/category crawl. Download links are link-vault.org pre-captcha containers — stored as repack links." },
-];
+
 
 const pasteHtmlSamples = `Paste a listing HTML here, e.g.:
 
@@ -71,10 +65,22 @@ function guessCategory(title: string, contentType?: DetailData["contentType"], e
   if (contentType === "movie") return "movies";
   if (contentType === "korean") return "korean";
   if (contentType === "tutorial") return "tutorials";
+  if (entryUrl && /filecr\.com\/mac|\/macos\//i.test(entryUrl)) return "mac";
+  if (contentType === "game") return "pc-games";
   const t = title.toLowerCase();
   if (/game|repack|torrent|edition|\bpc\b/i.test(t)) return "pc-games";
   if (/\bandroid\b|apk/.test(t)) return "android";
   if (/\bmac\b|macos/.test(t)) return "mac";
+  return "windows";
+}
+
+function guessPlatform(title: string, entryUrl?: string, contentType?: DetailData["contentType"]): Software["platform"] {
+  if (entryUrl && /filecr\.com\/mac|\/macos\//i.test(entryUrl)) return "mac";
+  if (entryUrl && /\/macos\//i.test(entryUrl)) return "mac";
+  const t = title.toLowerCase();
+  if (/\bmac\b|macos/.test(t)) return "mac";
+  if (/\bandroid\b|apk/.test(t)) return "android";
+  if (contentType === "game") return "windows";
   return "windows";
 }
 
@@ -164,6 +170,32 @@ export default function AdminImport() {
   const [torrentPrompt, setTorrentPrompt] = useState<{ indices: number[]; action: "accept" | "skip" | null } | null>(null);
   const [resolving, setResolving] = useState(false);
   const [resolveProgress, setResolveProgress] = useState({ done: 0, total: 0 });
+
+  // ── J: Progressive resume — persist to sessionStorage so refresh doesn't lose progress ──
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("importResume");
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (Array.isArray(saved.items) && saved.items.length > 0) setItems(saved.items);
+      if (Array.isArray(saved.entries) && saved.entries.length > 0) setEntries(saved.entries);
+      if (Array.isArray(saved.selected)) setSelected(new Set(saved.selected));
+      if (typeof saved.url === "string") setUrl(saved.url);
+      if (typeof saved.mode === "string" && ["site", "page", "paste"].includes(saved.mode)) setMode(saved.mode);
+      if (typeof saved.source === "string") setSource(saved.source);
+      if (typeof saved.pasteHtml === "string") setPasteHtml(saved.pasteHtml);
+      if (typeof saved.viewMode === "string") setViewMode(saved.viewMode);
+      if (typeof saved.nameFilter === "string") setNameFilter(saved.nameFilter);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      const payload = JSON.stringify({
+        url, mode, source, pasteHtml, entries: entries.slice(0, 200), items: items.slice(0, 500), selected: Array.from(selected).slice(0, 500), viewMode, nameFilter,
+      });
+      if (items.length > 0 || entries.length > 0) sessionStorage.setItem("importResume", payload);
+    } catch {}
+  }, [url, mode, source, pasteHtml, entries, items, selected, viewMode, nameFilter]);
 
   const fetchList = async () => {
     setError("");
@@ -458,7 +490,7 @@ export default function AdminImport() {
       return copy;
     });
 
-    const BATCH = 15;
+    const BATCH = TUNABLES.importResolveBatch;
     const stateByUrl = new Map<string, { state: LinkResolveState; directUrl?: string; fileName?: string; label?: string }>();
 
     try {
@@ -837,9 +869,9 @@ export default function AdminImport() {
         id: slugify(title) || `imported-${Date.now()}-${i}`,
         title,
         description: it.detail?.description || "",
-        category: guessCategory(title, it.detail?.contentType),
+        category: guessCategory(title, it.detail?.contentType, it.entry.url),
         subcategory: "",
-        platform: "windows",
+        platform: guessPlatform(title, it.entry.url, it.detail?.contentType),
         version: "",
         size: "",
         downloads: 0,
@@ -858,9 +890,9 @@ export default function AdminImport() {
     }
 
     if (added.length > 0) {
-      localStorage.setItem("softwareData", JSON.stringify([...existing, ...added]));
+      await saveSoftwareList([...existing, ...added]);
     } else if (updatedCount > 0) {
-      localStorage.setItem("softwareData", JSON.stringify(existing));
+      await saveSoftwareList(existing);
     }
     setImported(newCount);
     setUpdated(updatedCount);
@@ -887,13 +919,8 @@ export default function AdminImport() {
         arr.push({ detail: it.detail!, linkIndex: li, link });
         groups.set(host, arr);
       });
-      const groupHosts = Object.keys(groups);
-      for (let h = 0; h < groupHosts.length; h++) {
-        const host = groupHosts[h];
-        const links = groups.get(host);
-        if (links) {
-          out.push({ itemIndex: i, host, links });
-        }
+      for (const [host, links] of groups) {
+        out.push({ itemIndex: i, host, links });
       }
     });
     return out;

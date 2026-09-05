@@ -1,40 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordApiCall } from "@/lib/apiUsage";
+import { AI_PROVIDERS as PROVIDERS, TUNABLES, VALID_CATEGORIES as VALID_CATS, VALID_PLATFORMS as VALID_PLATS } from "@/lib/config";
+import { z } from "zod";
 
 export const dynamic = "force-dynamic";
-
-const PROVIDERS = [
-  {
-    name: "grok",
-    url: "https://api.x.ai/v1/chat/completions",
-    keyEnv: "XAI_API_KEY",
-    model: "grok-3-mini",
-  },
-  {
-    name: "groq",
-    url: "https://api.groq.com/openai/v1/chat/completions",
-    keyEnv: "GROQ_API_KEY",
-    model: "openai/gpt-oss-120b",
-  },
-  {
-    name: "gemini",
-    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    keyEnv: "GEMINI_API_KEY",
-    model: "gemini-2.5-flash-lite",
-  },
-  {
-    name: "mistral",
-    url: "https://api.mistral.ai/v1/chat/completions",
-    keyEnv: "MISTRAL_API_KEY",
-    model: "mistral-small-latest",
-  },
-  {
-    name: "zai",
-    url: "https://api.z.ai/api/paas/v4/chat/completions",
-    keyEnv: "ZAI_API_KEY",
-    model: "glm-4.7-flash",
-  },
-] as const;
 
 const SYSTEM = `You are a game and software metadata generator for a download portal called PixelVault.
 Given a title and optionally a provided description/context, produce accurate metadata.
@@ -69,10 +38,51 @@ interface AiMeta {
   size?: string;
 }
 
+// Module-level cache for pure-title enrichments (15min TTL, max 300) — avoids repeat LLM calls
+const ENRICH_CACHE = new Map<string, { meta: AiMeta; provider: string; ts: number }>();
+const ENRICH_TTL_MS = 15 * 60 * 1000;
+function enrichCacheGet(title: string) {
+  const k = title.toLowerCase().trim();
+  const hit = ENRICH_CACHE.get(k);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > ENRICH_TTL_MS) { ENRICH_CACHE.delete(k); return null; }
+  return hit;
+}
+function enrichCacheSet(title: string, meta: AiMeta, provider: string) {
+  if (ENRICH_CACHE.size >= 300) {
+    const oldest = ENRICH_CACHE.keys().next().value;
+    if (oldest) ENRICH_CACHE.delete(oldest);
+  }
+  ENRICH_CACHE.set(title.toLowerCase().trim(), { meta, provider, ts: Date.now() });
+}
+
+// Per-provider circuit breaker: 3 consecutive failures → skip for 5min
+const PROVIDER_BREAKER = new Map<string, { fails: number; blockedUntil: number }>();
+const BREAKER_THRESHOLD = 3;
+const BREAKER_COOLDOWN_MS = 5 * 60 * 1000;
+function isProviderBlocked(name: string): boolean {
+  const s = PROVIDER_BREAKER.get(name);
+  if (!s) return false;
+  if (Date.now() < s.blockedUntil) return true;
+  if (Date.now() >= s.blockedUntil && s.blockedUntil !== 0) {
+    PROVIDER_BREAKER.set(name, { fails: 0, blockedUntil: 0 });
+  }
+  return false;
+}
+function recordProviderFailure(name: string) {
+  const s = PROVIDER_BREAKER.get(name) || { fails: 0, blockedUntil: 0 };
+  s.fails += 1;
+  if (s.fails >= BREAKER_THRESHOLD) s.blockedUntil = Date.now() + BREAKER_COOLDOWN_MS;
+  PROVIDER_BREAKER.set(name, s);
+}
+function recordProviderSuccess(name: string) {
+  PROVIDER_BREAKER.set(name, { fails: 0, blockedUntil: 0 });
+}
+
 async function callProvider(
   provider: (typeof PROVIDERS)[number],
   prompt: string,
-  timeoutMs = 60000
+  timeoutMs = TUNABLES.enrichTimeoutMs
 ): Promise<string> {
   const key = process.env[provider.keyEnv];
   if (!key) throw new Error("no key");
@@ -100,19 +110,71 @@ async function callProvider(
   return text;
 }
 
-function parseJsonLoose(text: string): AiMeta | null {
+const AiMetaSchema = z.object({
+  found: z.boolean().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  features: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  category: z.string().optional(),
+  platform: z.string().optional(),
+  version: z.string().optional(),
+  size: z.string().optional(),
+}).passthrough();
+
+function extractBalancedJson(text: string): string | null {
   const cleaned = text.replace(/```json|```/g, "").trim();
-  const start = cleaned.search(/[[{]/);
+  // Find first { or [ and extract balanced block
+  const startIdx = cleaned.search(/[[{]/);
+  if (startIdx === -1) return null;
+  const open = cleaned[startIdx];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = startIdx; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return cleaned.slice(startIdx, i + 1);
+    }
+  }
+  // Fallback: last } / ]
   const end = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
-  if (start === -1 || end === -1) return null;
+  if (end > startIdx) return cleaned.slice(startIdx, end + 1);
+  return null;
+}
+
+function parseJsonLoose(text: string): AiMeta | null {
+  const candidate = extractBalancedJson(text);
+  if (!candidate) return null;
   try {
-    return JSON.parse(cleaned.slice(start, end + 1));
+    const parsed = JSON.parse(candidate);
+    const result = AiMetaSchema.safeParse(parsed);
+    if (result.success) return result.data as AiMeta;
+    // Array response (batch) — take first object
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const first = AiMetaSchema.safeParse(parsed[0]);
+      if (first.success) return first.data as AiMeta;
+    }
+    return parsed as AiMeta;
   } catch {
     return null;
   }
 }
 
 export async function POST(req: NextRequest) {
+  const { checkRateLimit } = await import("@/lib/rateLimit");
+  const rl = checkRateLimit(req as unknown as Request, 20);
+  if (!rl.ok) return NextResponse.json({ error: "Rate limited — try again shortly." }, { status: 429, headers: { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } });
   let body: { titles?: unknown; items?: unknown };
   try {
     body = await req.json();
@@ -137,19 +199,19 @@ export async function POST(req: NextRequest) {
         };
       })
       .filter((x): x is { title: string; description?: string } => !!x)
-      .slice(0, 20);
+      .slice(0, TUNABLES.enrichBatchMax);
   }
   if (inputs.length === 0 && Array.isArray(body.titles)) {
     inputs = body.titles
       .filter((t): t is string => typeof t === "string")
       .map((t) => t.trim())
       .filter(Boolean)
-      .slice(0, 20)
+      .slice(0, TUNABLES.enrichBatchMax)
       .map((t) => ({ title: t }));
   }
 
   if (inputs.length === 0) {
-    return NextResponse.json({ error: "Provide titles array or items array (max 20)" }, { status: 400 });
+    return NextResponse.json({ error: `Provide titles array or items array (max ${TUNABLES.enrichBatchMax})` }, { status: 400 });
   }
 
   const available = PROVIDERS.filter((p) => process.env[p.keyEnv]);
@@ -160,8 +222,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const VALID_CATEGORIES = ["pc-games", "windows", "mac", "android", "movies", "ebooks", "tutorials", "korean"];
-  const VALID_PLATFORMS = ["windows", "mac", "android", "cross-platform", "ios"];
+  const VALID_CATEGORIES = [...VALID_CATS] as string[];
+  const VALID_PLATFORMS = [...VALID_PLATS] as string[];
 
   function normalizeMeta(meta: AiMeta, contextDesc: string): AiMeta {
     const out: AiMeta = { ...meta };
@@ -193,6 +255,12 @@ export async function POST(req: NextRequest) {
   async function enrichOne(input: InputItem) {
     const title = input.title;
     const contextDesc = input.description?.trim() || "";
+    if (!contextDesc) {
+      const cached = enrichCacheGet(title);
+      if (cached) {
+        return { title, meta: cached.meta, provider: `${cached.provider}-cache` };
+      }
+    }
     const prompt = contextDesc
       ? `Title: "${title.replace(/^#+/, "").trim()}"\nProvided description/context (use this to enhance, do not return found:false): """${contextDesc.slice(0, 1200)}"""\nTask: Rewrite into a polished 2-3 sentence marketing description, extract 4-6 features, infer tags/category. Always return found:true.`
       : `Title: "${title.replace(/^#+/, "").trim()}"`;
@@ -200,6 +268,10 @@ export async function POST(req: NextRequest) {
     let delivered: { meta: AiMeta | null; provider: string } = { meta: null, provider: "" };
 
     for (const provider of available) {
+      if (isProviderBlocked(provider.name)) {
+        lastError = `${provider.name}: circuit-open (cooldown)`;
+        continue;
+      }
       for (let attempt = 0; attempt < 2; attempt++) {
         const started = Date.now();
         try {
@@ -218,7 +290,9 @@ export async function POST(req: NextRequest) {
             ok: true,
             latencyMs: Date.now() - started,
           });
+          recordProviderSuccess(provider.name);
           delivered = { meta, provider: provider.name };
+          if (!contextDesc) enrichCacheSet(title, meta, provider.name);
           lastError = "";
           break;
         } catch (e) {
@@ -231,6 +305,7 @@ export async function POST(req: NextRequest) {
             latencyMs: Date.now() - started,
             error: msg.slice(0, 200),
           });
+          recordProviderFailure(provider.name);
           lastError = `${provider.name}: ${msg}`;
           if (/HTTP 40[13]/.test(lastError)) break;
           await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
@@ -252,7 +327,7 @@ export async function POST(req: NextRequest) {
   const results: { title: string; meta: AiMeta | null; provider: string; error?: string }[] =
     new Array(inputs.length);
   let cursor = 0;
-  const CONCURRENCY = 3;
+  const CONCURRENCY = TUNABLES.enrichConcurrency;
   await Promise.all(
     Array.from({ length: Math.min(CONCURRENCY, inputs.length) }, async () => {
       while (cursor < inputs.length) {

@@ -45,11 +45,41 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
   const [reportMessage, setReportMessage] = useState("");
   const [reportError, setReportError] = useState("");
   const [downloadCount, setDownloadCount] = useState(software.downloads);
+  const [ublockModal, setUblockModal] = useState<{ url: string } | null>(null);
+  const [ublockDontShow, setUblockDontShow] = useState(false);
 
   const handleLinkDownload = async (url: string) => {
     const count = await incrementDownloads(software.id);
     setDownloadCount(count);
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const requestDownload = (url: string) => {
+    try {
+      if (localStorage.getItem("ublockPromptDismissed") === "true") {
+        handleLinkDownload(url);
+        return;
+      }
+    } catch {}
+    setUblockDontShow(false);
+    setUblockModal({ url });
+  };
+
+  const handleUblockSkip = () => {
+    if (!ublockModal) return;
+    const url = ublockModal.url;
+    try {
+      if (ublockDontShow) localStorage.setItem("ublockPromptDismissed", "true");
+    } catch {}
+    setUblockModal(null);
+    handleLinkDownload(url);
+  };
+
+  const handleUblockInstall = () => {
+    try {
+      if (ublockDontShow) localStorage.setItem("ublockPromptDismissed", "true");
+    } catch {}
+    window.open("https://ublockorigin.com/", "_blank", "noopener,noreferrer");
   };
 
   useEffect(() => {
@@ -258,13 +288,23 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
           <h3 className="text-red-500 font-black text-center mb-6 tracking-widest text-sm">FAREWELL PLAZA ♥</h3>
           <div className="space-y-6">
             {(() => {
+              const urlKey = (u: string) => (u || "").trim().toLowerCase().replace(/\/+$/, "");
+              const dedupedLinks = (links: typeof software.downloadLinks) => {
+                const seen = new Set<string>();
+                return links.filter((l) => {
+                  const k = urlKey(l.url);
+                  if (!k || seen.has(k)) return false;
+                  seen.add(k);
+                  return true;
+                });
+              };
               const directGroups: Record<string, typeof software.downloadLinks> = {};
-              const torrentLinks = software.downloadLinks.filter((l) => l.type === "torrent");
-              const directLinks = software.downloadLinks.filter((l) => l.type !== "torrent");
+              const torrentLinks = dedupedLinks(software.downloadLinks.filter((l) => l.type === "torrent"));
+              const directLinks = dedupedLinks(software.downloadLinks.filter((l) => l.type !== "torrent"));
 
               if (software.downloadsByHoster && Object.keys(software.downloadsByHoster).length > 0) {
                 for (const [host, links] of Object.entries(software.downloadsByHoster)) {
-                  directGroups[host] = links as any;
+                  directGroups[host] = Array.isArray(links) ? dedupedLinks(links as any) : [];
                 }
               } else {
                 for (const link of directLinks) {
@@ -293,6 +333,13 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                   {sortedHosts.map((host) => {
                     const links = directGroups[host];
                     const repack: any = links.length === 1 && (links[0] as any).type === "repack" && Array.isArray((links[0] as any).partLinks) ? (links[0] as any) : null;
+                    const repackPartLinks = repack
+                      ? (repack.partLinks as { part: number; url: string }[]).filter((p, i, arr) => {
+                          const k = urlKey(p.url);
+                          if (!k) return false;
+                          return arr.findIndex((q) => q.part === p.part || (urlKey(q.url) === k)) === i;
+                        })
+                      : [];
                     const isMultiPart = repack ? true : (links.length > 1 || !!(links[0] as any)?.partTotal);
                     const hostLabel = host.toUpperCase();
                     const hostColor =
@@ -305,23 +352,23 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
 
                     return (
                       <div key={host} className="flex flex-col items-center">
-                        <span className={`text-xs font-black tracking-wider mb-2 ${hostColor}`}>{hostLabel}{isMultiPart ? ` • ${repack ? repack.partLinks.length : links.length} parts` : ""}</span>
+                        <span className={`text-xs font-black tracking-wider mb-2 ${hostColor}`}>{hostLabel}{isMultiPart ? ` • ${repack ? repackPartLinks.length : links.length} parts` : ""}</span>
                         {!isMultiPart ? (
                           <button
-                            onClick={() => handleLinkDownload(sorted[0].url)}
+                            onClick={() => requestDownload(sorted[0].url)}
                             className="px-8 py-2.5 rounded-md bg-[#1e0f3a] border border-purple-700/50 text-white text-xs font-bold tracking-wider hover:bg-purple-800/30 transition-colors shadow-[0_0_12px_rgba(168,85,247,0.35)]"
                           >
                             DOWNLOAD HERE
                           </button>
                         ) : repack ? (
                           <div className="flex flex-wrap justify-center gap-2 max-w-xl">
-                            {repack.partLinks.map((p: any) => (
+                            {repackPartLinks.map((p: any) => (
                               <a
                                 key={`repack-${host}-${p.part}`}
                                 href={p.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                onClick={(e) => { e.preventDefault(); handleLinkDownload(p.url); }}
+                                onClick={(e) => { e.preventDefault(); requestDownload(p.url); }}
                                 className="px-4 py-2 rounded-md bg-[#1e0f3a] border border-purple-700/50 text-white text-xs font-bold hover:bg-purple-800/30 transition-colors shadow-[0_0_8px_rgba(168,85,247,0.25)] min-w-[84px] text-center"
                               >
                                 Part {p.part}
@@ -330,7 +377,7 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                           </div>
                         ) : (
                           <div className="flex flex-wrap justify-center gap-2 max-w-xl">
-                            {sorted.map((link: any, idx: number) => {
+                            {(sorted as any[]).filter((l, i) => sorted.findIndex((o: any) => o.part === l.part) === i).map((link: any, idx: number) => {
                               const partNum = link.part || idx + 1;
                               return (
                                 <a
@@ -338,7 +385,7 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
                                   href={link.url}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  onClick={(e) => { e.preventDefault(); handleLinkDownload(link.url); }}
+                                  onClick={(e) => { e.preventDefault(); requestDownload(link.url); }}
                                   className="px-4 py-2 rounded-md bg-[#1e0f3a] border border-purple-700/50 text-white text-xs font-bold hover:bg-purple-800/30 transition-colors shadow-[0_0_8px_rgba(168,85,247,0.25)] min-w-[84px] text-center"
                                 >
                                   Part {partNum}
@@ -571,6 +618,49 @@ export default function SoftwareContent({ software }: SoftwareContentProps) {
             >
               Open magnet link directly
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* uBlock Origin suggestion — shown before every direct download (optional, Skip proceeds) */}
+      {ublockModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/80" onClick={() => setUblockModal(null)} />
+          <div className="relative w-full max-w-md rounded-2xl border border-amber-500/20 bg-[#1a102e] p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg bg-amber-500/15 border border-amber-500/20 flex items-center justify-center flex-shrink-0">
+                <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.92-.552 3.71-1.506 5.23l-.054.09m-3.44-2.04A13.916 13.916 0 0112 11a4 4 0 10-4 4c0 1.92.552 3.71 1.506 5.23z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white tracking-wide">Recommended: uBlock Origin</h3>
+                <p className="text-amber-300/70 text-xs">Blocks popups & ads on file hosts</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-300 mb-4 leading-relaxed">
+              File hosts like Datanodes, FileKeeper and Gofile show popups and redirects. <span className="text-white font-medium">uBlock Origin</span> (free, open-source) blocks them and makes downloads faster. This is <span className="text-amber-300">optional</span> — you can skip and download right away.
+            </p>
+            <label className="flex items-center gap-2 mb-5 cursor-pointer select-none">
+              <input type="checkbox" checked={ublockDontShow} onChange={(e) => setUblockDontShow(e.target.checked)} className="h-4 w-4 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500" />
+              <span className="text-xs text-gray-400">Don&apos;t show again</span>
+            </label>
+            <div className="flex gap-3">
+              <button
+                onClick={handleUblockSkip}
+                className="flex-1 bg-[#2a1b4a] hover:bg-[#3a2570] border border-purple-700/40 text-white py-2.5 rounded-lg text-sm font-bold transition-colors"
+              >
+                Skip & Download
+              </button>
+              <button
+                onClick={handleUblockInstall}
+                className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-950 py-2.5 rounded-lg text-sm font-black transition-colors"
+              >
+                Get uBlock Origin
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-500 text-center mt-3">Opens ublockorigin.com in a new tab — then click Download again or use Skip.</p>
           </div>
         </div>
       )}

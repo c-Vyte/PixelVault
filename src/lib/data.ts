@@ -153,7 +153,26 @@ function sanitizeSoftware(sw: any): Software {
     password: clean(sw.password),
     videoUrl: clean(sw.videoUrl),
     features: Array.isArray(sw.features) ? sw.features.filter((f: any) => typeof f === "string" && !f.includes("[object Object]")) : [],
-    screenshots: Array.isArray(sw.screenshots) ? sw.screenshots.filter((s: any) => typeof s === "string" && s.startsWith("http")) : [],
+    screenshots: (() => {
+      const raw: string[] = Array.isArray(sw.screenshots) ? sw.screenshots.filter((s: any) => typeof s === "string" && s.startsWith("http")) : [];
+      // For apps/software, strip stray game banners that leaked from sidebar-related products (gamedrive etc.)
+      const isApp = sw.category !== "pc-games" && sw.category !== "movies" && sw.category !== "korean";
+      if (!isApp || raw.length <= 1) return raw.slice(0, 8);
+      const titleWords = (sw.title || "").toLowerCase().split(/[^a-z0-9]+/).filter((w: string) => w.length >= 4);
+      // Keep ad/join etc. already filtered, but also drop game banners that don't share a title word
+      const filtered = raw.filter((url) => {
+        if (/cybar|join\.png|advert|banner/i.test(url)) return false;
+        const lowerUrl = url.toLowerCase();
+        // Keep if URL contains any significant title word
+        if (titleWords.some((w: string) => lowerUrl.includes(w))) return true;
+        // Keep the poster/icon host image even if slug mismatch (fallback)
+        if (sw.icon && lowerUrl === sw.icon.toLowerCase()) return true;
+        if (sw.poster && lowerUrl === sw.poster.toLowerCase()) return true;
+        return false;
+      });
+      if (filtered.length === 0) return raw.slice(0, 1);
+      return filtered.slice(0, 1);
+    })(),
     downloadLinks: Array.isArray(sw.downloadLinks) ? sw.downloadLinks.map((l: any) => ({
       ...l,
       name: clean(l.name) || "Download",
@@ -172,14 +191,39 @@ export async function getSoftwareList(): Promise<Software[]> {
   if (cachePromise) return cachePromise;
 
   cachePromise = (async () => {
+    // Try server first (shared, Hetzner volume) — published + pending for admin, published only for client via getPublishedSoftwareList
+    if (typeof window !== "undefined") {
+      try {
+        const res = await fetch("/api/software?all=1", { cache: "no-store" });
+        if (res.ok) {
+          const data = (await res.json()) as Software[];
+          if (Array.isArray(data) && data.length > 0) {
+            const sanitized = data.map(sanitizeSoftware);
+            // Keep local cache in sync (offline fallback)
+            try {
+              const { idbSaveAll } = await import("@/lib/indexedDB");
+              idbSaveAll(sanitized).catch(() => {});
+            } catch {}
+            return sanitized;
+          }
+        }
+      } catch {}
+    }
     if (typeof window === "undefined") return softwareData;
 
     try {
-      // Try IndexedDB first
+      // Try IndexedDB first (offline fallback)
       const { idbGetAll } = await import("@/lib/indexedDB");
       const data = await idbGetAll();
       if (data.length > 0) {
-        return data.map(sanitizeSoftware);
+        const sanitized = data.map(sanitizeSoftware);
+        const needsSave = sanitized.some((s, i) => s.screenshots.length !== (data[i] as unknown as { screenshots?: unknown[] }).screenshots?.length);
+        if (needsSave) {
+          // Background migration: remove game banners from app screenshots
+          saveSoftwareList(sanitized).catch(() => {});
+          try { window.dispatchEvent(new Event("software-data-changed")); } catch {}
+        }
+        return sanitized;
       }
     } catch {
       // IndexedDB failed, fall through to localStorage
@@ -191,7 +235,15 @@ export async function getSoftwareList(): Promise<Software[]> {
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(sanitizeSoftware);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const sanitized = parsed.map(sanitizeSoftware);
+            const needsSave = sanitized.some((s, i) => s.screenshots.length !== (parsed[i] as { screenshots?: unknown[] }).screenshots?.length);
+            if (needsSave) {
+              saveSoftwareList(sanitized).catch(() => {});
+              try { window.dispatchEvent(new Event("software-data-changed")); } catch {}
+            }
+            return sanitized;
+          }
         } catch {}
       }
 
@@ -208,7 +260,15 @@ export async function getSoftwareList(): Promise<Software[]> {
               const chunk = JSON.parse(chunkRaw);
               if (Array.isArray(chunk)) combined.push(...chunk);
             }
-            if (combined.length > 0) return combined.map(sanitizeSoftware);
+            if (combined.length > 0) {
+              const sanitized = combined.map(sanitizeSoftware);
+              const needsSave = sanitized.some((s, i) => s.screenshots.length !== (combined[i] as { screenshots?: unknown[] }).screenshots?.length);
+              if (needsSave) {
+                saveSoftwareList(sanitized).catch(() => {});
+                try { window.dispatchEvent(new Event("software-data-changed")); } catch {}
+              }
+              return sanitized;
+            }
           }
         } catch {}
       }
@@ -346,8 +406,32 @@ export async function saveSoftwareList(data: Software[]): Promise<boolean> {
   softwareCache = null;
   cachePromise = null;
 
+  // Try server first (shared, Hetzner volume) — so manual adds show on client
+  if (typeof window !== "undefined") {
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const token = localStorage.getItem("adminToken") || "";
+      if (token) headers["x-admin-token"] = token;
+      const res = await fetch("/api/software", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        // Keep local cache in sync for offline fallback
+        try {
+          const { idbSaveAll } = await import("@/lib/indexedDB");
+          await idbSaveAll(data);
+          clearChunkedStorage();
+          localStorage.removeItem("softwareData");
+        } catch {}
+        return true;
+      }
+    } catch {}
+  }
+
   try {
-    // Try IndexedDB first (much larger quota)
+    // Try IndexedDB first (much larger quota, offline fallback)
     const { idbSaveAll } = await import("@/lib/indexedDB");
     const success = await idbSaveAll(data);
     if (success) {

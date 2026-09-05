@@ -4,21 +4,19 @@ import { createContext, useContext, useState, useEffect, ReactNode } from "react
 
 interface AuthContextType {
   isLoggedIn: boolean;
-  login: (password: string) => boolean;
+  login: (password: string, opts?: { totp?: string; idToken?: string }) => Promise<{ ok: boolean; needTotp?: boolean; needGoogle?: boolean; error?: string }>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
   isLoggedIn: false,
-  login: () => false,
+  login: async () => ({ ok: false }),
   logout: () => {},
 });
 
 export function useAuth() {
   return useContext(AuthContext);
 }
-
-const ADMIN_PASSWORD = "admin123";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -32,16 +30,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMounted(true);
   }, []);
 
-  const login = (password: string): boolean => {
-    if (password === ADMIN_PASSWORD) {
+  const login = async (password: string, opts?: { totp?: string; idToken?: string }): Promise<{ ok: boolean; needTotp?: boolean; needGoogle?: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password, totp: opts?.totp || undefined, idToken: opts?.idToken || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, needTotp: (data as { needTotp?: boolean }).needTotp, needGoogle: (data as { needGoogle?: boolean }).needGoogle, error: (data as { error?: string }).error };
       setIsLoggedIn(true);
       sessionStorage.setItem("admin_auth", "true");
-      return true;
+      return { ok: true };
+    } catch {
+      return { ok: false };
     }
-    return false;
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try { await fetch("/api/admin/login", { method: "DELETE" }); } catch {}
     setIsLoggedIn(false);
     sessionStorage.removeItem("admin_auth");
   };

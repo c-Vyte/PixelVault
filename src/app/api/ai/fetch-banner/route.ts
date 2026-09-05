@@ -1,12 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BROWSER_HEADERS, isCloudflareChallenge } from "@/lib/fetchUtils";
 import { recordApiCall } from "@/lib/apiUsage";
+import { TUNABLES } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const UA = BROWSER_HEADERS["User-Agent"];
-const REQ_TIMEOUT = 9000;
+const REQ_TIMEOUT = TUNABLES.bannerTimeoutMs;
+
+// In-memory cache: title+kind -> result (30min TTL, max 200 entries)
+const BANNER_CACHE = new Map<string, { data: { banner: string; provider: string; matchedTitle?: string; steamAppId?: number; kind: string }; ts: number }>();
+const CACHE_TTL_MS = 30 * 60 * 1000;
+function cacheGet(key: string) {
+  const hit = BANNER_CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > CACHE_TTL_MS) { BANNER_CACHE.delete(key); return null; }
+  return hit.data;
+}
+function cacheSet(key: string, data: { banner: string; provider: string; matchedTitle?: string; steamAppId?: number; kind: string }) {
+  if (BANNER_CACHE.size >= 200) {
+    const oldest = BANNER_CACHE.keys().next().value;
+    if (oldest) BANNER_CACHE.delete(oldest);
+  }
+  BANNER_CACHE.set(key, { data, ts: Date.now() });
+}
 
 function timeout(ms: number) {
   return AbortSignal.timeout(ms);
@@ -184,6 +202,31 @@ async function duckImage(title: string, want: "banner" | "poster"): Promise<stri
   return null;
 }
 
+/** RAWG fallback — requires RAWG_API_KEY env. Returns background_image for best match. */
+async function rawgImage(title: string): Promise<string | null> {
+  const key = process.env.RAWG_API_KEY;
+  if (!key) return null;
+  try {
+    const q = encodeURIComponent(title.replace(/^#+/, "").replace(/\s*[\(\[].*?(repack|fitgirl|codex).*?[\)\]]/gi, "").trim());
+    const res = await fetch(`https://api.rawg.io/api/games?key=${key}&search=${q}&page_size=5`, {
+      headers: { "User-Agent": UA },
+      signal: timeout(REQ_TIMEOUT),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { results?: { name: string; background_image?: string; background_image_additional?: string }[] };
+    const results = data.results || [];
+    if (results.length === 0) return null;
+    let best = results[0];
+    let bestScore = similarity(title, best.name);
+    for (const r of results.slice(1)) {
+      const s = similarity(title, r.name);
+      if (s > bestScore) { bestScore = s; best = r; }
+    }
+    if (bestScore < 0.25) return null;
+    return best.background_image || best.background_image_additional || null;
+  } catch { return null; }
+}
+
 /**
  * Validate an image URL resolves to a real, reasonably-sized raster.
  * Uses a ranged GET so we don't download the whole asset.
@@ -194,7 +237,7 @@ async function validateImage(url: string): Promise<boolean> {
       const res = await fetch(url, {
         method,
         headers: { "User-Agent": UA, Range: "bytes=0-2047" },
-        signal: timeout(6000),
+        signal: timeout(TUNABLES.bannerValidateTimeoutMs),
         redirect: "follow",
       });
       if (!res.ok && res.status !== 206) {
@@ -228,6 +271,9 @@ async function firstValid(urls: string[]): Promise<string | null> {
 }
 
 export async function POST(req: NextRequest) {
+  const { checkRateLimit } = await import("@/lib/rateLimit");
+  const rl = checkRateLimit(req as unknown as Request, 30);
+  if (!rl.ok) return NextResponse.json({ error: "Rate limited — try again shortly." }, { status: 429, headers: { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } });
   const started = Date.now();
   let body: { title?: unknown; kind?: unknown };
   try { body = await req.json(); } catch {
@@ -236,6 +282,12 @@ export async function POST(req: NextRequest) {
   const title = typeof body.title === "string" ? body.title.trim() : "";
   if (!title) return NextResponse.json({ error: "title required" }, { status: 400 });
   const want: "banner" | "poster" = body.kind === "poster" ? "poster" : "banner";
+  const cacheKey = `${want}:${title.toLowerCase().trim()}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) {
+    recordApiCall({ route: "/api/ai/fetch-banner", provider: `${cached.provider}-cache`, ok: true, latencyMs: Date.now() - started });
+    return NextResponse.json({ ...cached, title, cached: true });
+  }
 
   const candidates: { url: string; provider: string }[] = [];
 
@@ -255,7 +307,7 @@ export async function POST(req: NextRequest) {
         const valid = await firstValid(urls);
         if (valid) {
           recordApiCall({ route: "/api/ai/fetch-banner", provider: "steam", ok: true, latencyMs: Date.now() - started });
-          return NextResponse.json({
+          const result = {
             banner: valid,
             provider: "steam",
             steamAppId: it.id,
@@ -263,10 +315,23 @@ export async function POST(req: NextRequest) {
             kind: want,
             candidates: urls.slice(0, 6),
             title,
-          });
+          };
+          cacheSet(cacheKey, result);
+          return NextResponse.json(result);
         }
         urls.forEach((url) => candidates.push({ url, provider: "steam" }));
       }
+    }
+  } catch { /* fall through */ }
+
+  // 1b. RAWG (when STEAM misses and RAWG_API_KEY is set)
+  try {
+    const rawg = await rawgImage(title);
+    if (rawg && (await validateImage(rawg))) {
+      recordApiCall({ route: "/api/ai/fetch-banner", provider: "rawg", ok: true, latencyMs: Date.now() - started });
+      const result = { banner: rawg, provider: "rawg", kind: want, title };
+      cacheSet(cacheKey, result);
+      return NextResponse.json(result);
     }
   } catch { /* fall through to web */ }
 
@@ -275,7 +340,9 @@ export async function POST(req: NextRequest) {
     const web = await duckImage(title, want);
     if (web && (await validateImage(web))) {
       recordApiCall({ route: "/api/ai/fetch-banner", provider: "web-og", ok: true, latencyMs: Date.now() - started });
-      return NextResponse.json({ banner: web, provider: "web", kind: want, title });
+      const result = { banner: web, provider: "web", kind: want, title };
+      cacheSet(cacheKey, result);
+      return NextResponse.json(result);
     }
   } catch { /* no banner */ }
 

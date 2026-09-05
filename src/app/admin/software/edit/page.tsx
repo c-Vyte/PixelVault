@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { categories, getSoftwareByIdLive, type Software } from "@/lib/data";
+import { categories, getSoftwareByIdLive, type Software, saveSoftwareList } from "@/lib/data";
 import { parseGameDetails, type ParsedGameData } from "@/lib/parseGameDetails";
 import { groupLinks } from "@/lib/partGroups";
 
@@ -308,7 +308,7 @@ function EditSoftwareForm() {
 
   const selectedCategory = categories.find((c) => c.id === form.category);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Load existing data from localStorage
@@ -379,7 +379,7 @@ function EditSoftwareForm() {
     }
 
     try {
-      localStorage.setItem("softwareData", JSON.stringify(allSoftware));
+      await saveSoftwareList(allSoftware);
       clearDraft();
       setSaveError("");
       alert(editId ? "Software updated!" : "Software added!");

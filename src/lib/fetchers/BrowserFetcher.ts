@@ -1,20 +1,9 @@
 import { Page } from 'playwright';
 import { BrowserPool, getBrowserPool, shutdownBrowserPool } from './BrowserPool';
 import { FetchOptions, FetchResult, Fetcher } from './types';
+import { isCloudflareChallenge } from '../fetchUtils';
 
-const REPACK_DOMAINS = [
-  'steamrip.com',
-  'fitgirl-repacks.site',
-  'dodi-repacks.site',
-  'skidrowreloaded.com',
-  'repack-games.com',
-  're-packs.com',
-  'elamigos.site',
-  'gamedrive.org',
-  'online-fix.me',
-  'crackwatch.com',
-  'cs.rin.ru',
-];
+import { REPACK_DOMAINS } from '../config';
 
 const SITE_CONFIGS: Record<string, FetchOptions> = {
   'steamrip.com': {
@@ -85,10 +74,6 @@ export function getSiteConfig(url: string): FetchOptions {
     }
   } catch {}
   return SITE_CONFIGS.default;
-}
-
-function isCloudflareChallenge(html: string): boolean {
-  return /Just a moment|cf-chl|cFp|c__cf_chl|challenge-platform|cf_chl_opt|Checking your browser|Ray ID:/i.test(html);
 }
 
 function looksLikeRepackSite(url: string): boolean {

@@ -28,9 +28,7 @@ function sortSoftware(items: Software[], sort: SortOption): Software[] {
 export default function CategoryContent({ slug }: { slug: string }) {
   const searchParams = useSearchParams();
   const initialPage = Number(searchParams.get("page")) || 1;
-  const isPcGames = slug === "pc-games";
-  const ITEMS_PER_PAGE_PC = 20;
-  const itemsPerPage = isPcGames ? ITEMS_PER_PAGE_PC : ITEMS_PER_PAGE;
+  const itemsPerPage = 16;
   const initialSort = (searchParams.get("sort") as SortOption) || "newest";
 
   const [currentPage, setCurrentPage] = useState(initialPage);
@@ -108,16 +106,31 @@ export default function CategoryContent({ slug }: { slug: string }) {
         return sizeGB === null || sizeGB <= maxSize;
       });
     }
-    return items;
+    const seenTitles = new Map<string, Software>();
+    const deduped: Software[] = [];
+    for (const s of items) {
+      const key = (s.title || "").trim().toLowerCase();
+      if (!key) {
+        deduped.push(s);
+        continue;
+      }
+      const existing = seenTitles.get(key);
+      const linkCount = (s.downloadLinks || []).filter((l) => l.url && l.url.trim()).length;
+      const existingLinkCount = existing ? (existing.downloadLinks || []).filter((l) => l.url && l.url.trim()).length : 0;
+      if (!existing) {
+        seenTitles.set(key, s);
+        deduped.push(s);
+      } else if (linkCount > existingLinkCount) {
+        const idx = deduped.indexOf(existing);
+        if (idx !== -1) deduped[idx] = s;
+        seenTitles.set(key, s);
+      }
+    }
+    return deduped;
   }, [allSoftware, selectedSub, selectedPlatform, minRating, maxSize]);
 
-  const isAppCompact = slug === "apps" || slug === "android-apps";
-
-  const gridClass = isPcGames
-    ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"
-    : isAppCompact
-      ? "grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3"
-      : "grid grid-cols-1 md:grid-cols-2 gap-4";
+  // 4×4 grid for all categories (user request)
+  const gridClass = "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-4";
 
   const sorted = useMemo(() => sortSoftware(filtered, sortBy), [filtered, sortBy]);
   const totalPages = Math.ceil(sorted.length / itemsPerPage);
@@ -265,7 +278,7 @@ export default function CategoryContent({ slug }: { slug: string }) {
         <>
           <div className={gridClass}>
             {paginated.map((sw) => (
-              <SoftwareCard key={sw.id} software={sw} compact={isAppCompact || isPcGames} />
+              <SoftwareCard key={sw.id} software={sw} compact />
             ))}
           </div>
           <Pagination

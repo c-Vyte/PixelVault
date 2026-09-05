@@ -1,5 +1,6 @@
 import { chromium, Browser, BrowserContext } from 'playwright';
 import { existsSync } from 'fs';
+import { TUNABLES, pickUserAgent } from '../config';
 
 export class BrowserPool {
   private browser: Browser | null = null;
@@ -8,11 +9,11 @@ export class BrowserPool {
   private maxContexts: number;
   private idleTimeoutMs: number;
   private launchPromise: Promise<Browser> | null = null;
-  private waitQueue: ((ctx: BrowserContext) => void)[] = [];
+  private waitQueue: Array<{ resolve: (ctx: BrowserContext) => void; reject: (e: Error) => void }> = [];
 
   constructor(
-    maxContexts = 2,
-    idleTimeoutMs = 5 * 60 * 1000
+    maxContexts = TUNABLES.browserMaxContexts,
+    idleTimeoutMs = TUNABLES.browserIdleMs
   ) {
     this.maxContexts = maxContexts;
     this.idleTimeoutMs = idleTimeoutMs;
@@ -27,10 +28,11 @@ export class BrowserPool {
       return this.launchPromise;
     }
 
+    const localAppData = process.env.LOCALAPPDATA || process.env.USERPROFILE || "";
     const systemChromePaths = [
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe',
+      ...(localAppData ? [localAppData + '\\Google\\Chrome\\Application\\chrome.exe'] : []),
       '/usr/bin/google-chrome',
       '/usr/bin/chromium',
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -78,9 +80,8 @@ export class BrowserPool {
         this.contexts = [];
         this.availableContexts = [];
         this.launchPromise = null;
-        // Reject all waiters — browser died
         for (const waiter of this.waitQueue) {
-          waiter(null as unknown as BrowserContext);
+          waiter.reject(new Error("browser disconnected"));
         }
         this.waitQueue = [];
       });
@@ -94,8 +95,7 @@ export class BrowserPool {
   private async createContext(): Promise<BrowserContext> {
     const browser = await this.getBrowser();
     const context = await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      userAgent: pickUserAgent(),
       viewport: { width: 1366, height: 768 },
       locale: 'en-US',
       timezoneId: 'America/New_York',
@@ -133,19 +133,14 @@ export class BrowserPool {
     // Wait for one to become available (event-driven, no polling)
     return new Promise<BrowserContext>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        // Remove this waiter from the queue
         this.waitQueue = this.waitQueue.filter(w => w !== waiter);
-        // Force-create a context as last resort
         this.createContext().then(ctx => {
           this.contexts.push(ctx);
           resolve(ctx);
         }).catch(reject);
-      }, 15000);
+      }, TUNABLES.browserWaitQueueMs);
 
-      const waiter = (ctx: BrowserContext) => {
-        clearTimeout(timeout);
-        resolve(ctx);
-      };
+      const waiter = { resolve: (ctx: BrowserContext) => { clearTimeout(timeout); resolve(ctx); }, reject: (e: Error) => { clearTimeout(timeout); reject(e); } };
       this.waitQueue.push(waiter);
     });
   }
@@ -159,10 +154,9 @@ export class BrowserPool {
 
     if (!this.contexts.includes(context)) return;
 
-    // Wake a waiter instead of pooling
     if (this.waitQueue.length > 0) {
       const waiter = this.waitQueue.shift()!;
-      waiter(context);
+      waiter.resolve(context);
       return;
     }
 
@@ -186,9 +180,8 @@ export class BrowserPool {
     this.contexts = [];
     this.availableContexts = [];
 
-    // Reject all waiters
     for (const waiter of this.waitQueue) {
-      waiter(null as unknown as BrowserContext);
+      waiter.reject(new Error("pool shutdown"));
     }
     this.waitQueue = [];
 
@@ -214,7 +207,7 @@ let poolInstance: BrowserPool | null = null;
 
 export function getBrowserPool(): BrowserPool {
   if (!poolInstance) {
-    poolInstance = new BrowserPool(2, 5 * 60 * 1000);
+    poolInstance = new BrowserPool();
   }
   return poolInstance;
 }

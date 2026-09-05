@@ -25,8 +25,9 @@ interface ResultItem {
   error?: string;
 }
 
-const PLATFORMS = ["windows", "mac", "android", "ios", "cross-platform"];
-const CATEGORY_IDS = categories.map((c) => c.id);
+import { VALID_PLATFORMS, VALID_CATEGORIES, DEFAULTS } from "@/lib/config";
+const PLATFORMS = [...VALID_PLATFORMS] as string[];
+const CATEGORY_IDS = [...VALID_CATEGORIES] as string[];
 
 function makeId(title: string): string {
   return `ai-${Date.now()}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`;
@@ -143,33 +144,66 @@ export default function AiFetchPage() {
     const saveable = results.filter((r) => r.meta && r.meta.found !== false && !savedTitles.has(r.title));
     if (saveable.length === 0) return;
     setSavingAll(true);
-    let okCount = 0;
-    for (const item of saveable) {
-      if (!item.meta?.banner && item.meta) {
-        try {
-          const t = (item.meta.title || item.title).trim();
-          const r = await fetch("/api/ai/fetch-banner", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: t }),
-          });
-          const d = await r.json();
-          if (r.ok && d.banner) item.meta.banner = d.banner;
-        } catch { /* leave placeholder */ }
+    try {
+      // Fetch missing banners in parallel (max 3 concurrent) before building entries
+      const bannerPromises = saveable.map(async (item) => {
+        if (!item.meta?.banner && item.meta) {
+          try {
+            const t = (item.meta.title || item.title).trim();
+            const r = await fetch("/api/ai/fetch-banner", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ title: t }),
+            });
+            const d = await r.json();
+            if (r.ok && d.banner) {
+              item.meta.banner = d.banner;
+              item.meta.bannerProvider = d.provider;
+            }
+          } catch { /* leave placeholder */ }
+        }
+      });
+      // Process in chunks of 3 to respect rate limits
+      for (let i = 0; i < bannerPromises.length; i += 3) {
+        await Promise.all(bannerPromises.slice(i, i + 3));
       }
-      const entry = buildEntry(item);
-      if (!entry) continue;
+
+      const entries = saveable.map(buildEntry).filter((e): e is Software => e !== null);
+      if (entries.length === 0) {
+        toast("No valid entries to save.", "error");
+        return;
+      }
       const existing = await getSoftwareList();
-      if (existing.some((s) => s.title.toLowerCase().trim() === entry.title.toLowerCase())) continue;
-      const saved = await saveSoftwareList([...existing, entry]);
-      if (saved) {
-        okCount++;
-        setSavedTitles((prev) => new Set(prev).add(item.title));
+      const existingTitles = new Set(existing.map((s) => s.title.toLowerCase().trim()));
+      const seenInBatch = new Set<string>();
+      const toAdd: Software[] = [];
+      for (const e of entries) {
+        const k = e.title.toLowerCase().trim();
+        if (existingTitles.has(k) || seenInBatch.has(k) || savedTitles.has(e.title)) continue;
+        seenInBatch.add(k);
+        toAdd.push(e);
       }
+      if (toAdd.length === 0) {
+        toast("All titles already exist in library.", "error");
+        return;
+      }
+      const saved = await saveSoftwareList([...existing, ...toAdd]);
+      if (saved) {
+        setSavedTitles((prev) => {
+          const next = new Set(prev);
+          toAdd.forEach((e) => next.add(saveable.find((r) => (r.meta?.title || r.title) === e.title)?.title || e.title));
+          saveable.forEach((r) => next.add(r.title));
+          return next;
+        });
+        window.dispatchEvent(new Event("software-data-changed"));
+        const skipped = entries.length - toAdd.length;
+        toast(`Saved ${toAdd.length} entries${skipped ? ` (${skipped} duplicates skipped)` : ""}.`, "success");
+      } else {
+        toast("Save failed — storage full.", "error");
+      }
+    } finally {
+      setSavingAll(false);
     }
-    window.dispatchEvent(new Event("software-data-changed"));
-    toast(`Saved ${okCount} entries to library.`, "success");
-    setSavingAll(false);
   };
 
   const saveOne = async (item: ResultItem) => {

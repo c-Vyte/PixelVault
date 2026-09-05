@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { softwareData as staticData, categories, type Software } from "@/lib/data";
+import { softwareData as staticData, categories, type Software, saveSoftwareList } from "@/lib/data";
 import { getDownloadStats } from "@/lib/data";
 
 export default function AdminDashboard() {
@@ -90,19 +90,19 @@ export default function AdminDashboard() {
 
   const [keepMode, setKeepMode] = useState(true);
 
-  const persistSoftware = (next: Software[]) => {
+  const persistSoftware = async (next: Software[]) => {
     setSoftwareList(next);
-    localStorage.setItem("softwareData", JSON.stringify(next));
+    await saveSoftwareList(next);
     window.dispatchEvent(new Event("download-stats-changed"));
   };
 
-  const deleteMissingAll = () => {
+  const deleteMissingAll = async () => {
     const next = softwareList.filter((s) => s.downloadLinks?.some((l) => l.url && l.url.trim()));
-    persistSoftware(next);
+    await persistSoftware(next);
   };
 
-  const deleteMissingOne = (id: string) => {
-    persistSoftware(softwareList.filter((s) => s.id !== id));
+  const deleteMissingOne = async (id: string) => {
+    await persistSoftware(softwareList.filter((s) => s.id !== id));
   };
 
   return (

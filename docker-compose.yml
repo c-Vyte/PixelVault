@@ -1,0 +1,18 @@
+services:
+  pixelvault:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - pixelvault_data:/app/data
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - DATA_DIR=/app/data
+      - BROWSER_MAX_CONTEXTS=2
+      - BROWSER_IDLE_MS=300000
+    restart: unless-stopped
+
+volumes:
+  pixelvault_data:

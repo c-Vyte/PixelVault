@@ -79,25 +79,25 @@ export function Header() {
   return (
     <>
       <header className="site-header sticky top-0 z-40 w-full border-b backdrop-blur-md">
-        <div className="mx-auto flex h-12 max-w-[1440px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
-          <div className="flex min-w-0 items-center gap-5">
-            <Link href="/" className="group flex items-center gap-2 cursor-pointer">
-              <div className="site-primary-bg flex h-7 w-7 items-center justify-center rounded-lg text-[13px] font-black transition-transform group-hover:scale-105">
+        <div className="mx-auto flex h-14 max-w-[1440px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-6">
+            <Link href="/" className="group flex items-center gap-2.5 cursor-pointer">
+              <div className="site-primary-bg flex h-8 w-8 items-center justify-center rounded-lg text-[15px] font-black transition-transform group-hover:scale-105">
                 P
               </div>
-              <span className="site-text font-mono text-[11px] font-black uppercase tracking-[0.24em]">
+              <span className="site-text font-mono text-[14px] font-black uppercase tracking-[0.22em]">
                 PixelVault
               </span>
             </Link>
 
-            <nav className="hidden items-center gap-5 md:flex">
+            <nav className="hidden items-center gap-6 md:flex">
               {navLinks.map((link) => {
                 const active = pathname === link.href;
                 return (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className={`font-mono text-[10px] font-bold uppercase tracking-[0.22em] transition-colors ${
+                    className={`font-mono text-[13px] font-bold uppercase tracking-[0.18em] transition-colors ${
                       active ? "site-primary-text" : "site-nav site-muted"
                     }`}
                   >

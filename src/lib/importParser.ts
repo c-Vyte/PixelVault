@@ -41,6 +41,8 @@ export function guessContentType(url: string, title: string): ParsedDetail["cont
   if (/\/(movie|movies|film|series|korean-series|korean)\//.test(path)) return "movie";
   if (/\/(game|games)\//.test(path) || /\b(pc game|repack)\b/.test(t)) return "game";
   if (/\b(udemy|tutorial|course)\b/i.test(t)) return "tutorial";
+  // Gamedrive/filecr games often carry DLC/Build/Edition markers without /game/ in URL
+  if (/\b(DLC|Hypervisor|Premium Edition|Deluxe Edition|Repack|FitGirl|DODI|KaOs|Elamigos)\b/i.test(title)) return "game";
   return "software";
 }
 
@@ -99,7 +101,7 @@ export function cleanTitle(text: string): string {
     .trim();
 }
 
-const GENERIC_LINK_NAMES = /^(download|click here|click here to download|download now|download free|free download|get|install|mirror|server|link|here|direct|part \d+|part\d+)$/i;
+const GENERIC_LINK_NAMES = /^(download|click here|click here to download|download now|download free|free download|get|install|mirror|server|link|here|direct|part \d+|part\d+|t[eé]l[eé]charger|herunterladen|descargar|scarica|baixar|скачать|ダウンロード|下载|تحميل|pobierz|indir)$/i;
 
 export function isGenericLinkName(name: string): boolean {
   return GENERIC_LINK_NAMES.test(name.trim());
@@ -239,7 +241,7 @@ export function fileNameFromUrlHash(url: string): string {
 }
 
 const FILE_HOSTS =
-  /(mega\.nz|mega\.co\.nz|mega\.io|mediafire\.com|fileskeep\.|megaup\.|pixeldrain\.com|pixeldrain\.dev|pixeldrain\.net|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.com|1fichier\.net|uptobox\.com|uptobox\.eu|uptobox\.net|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles|qload|uploadfly|send\.cm|wetransfer\.com|megaup\.net|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share\.com|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|keep2share|zippyshare|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|anonfiles\.to|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|krakenfiles\.com|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|zippyshare\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org|filecrypt\.cc|keeplinks\.org|protect-link|link-protector|link-vault\.org|fileditch\.|vikingfile)/;
+  /(mega\.nz|mega\.co\.nz|mega\.io|mediafire\.com|fileskeep\.|megaup\.(?:net)?|pixeldrain\.(?:com|dev|net)|pixel\.drain|dropbox\.com|drive\.google\.com|1fichier\.(?:com|net)|uptobox\.(?:com|eu|net)|userscloud|katfile\.com|turbobit\.net|hitfile\.net|uploadrar|filedot|yandex|volafile|anonfiles(?:\.to)?|zippyshare|ddownload|racaty|go4up|uploadboy|filecr\.com\/download|mirrorace|samdownloads|onlinedown|wonderfulshare|uploadhub|mdtc|doo\.ws|krakenfiles(?:\.com)?|qload|uploadfly|send\.cm|wetransfer\.com|datanodes\.|rnode\d*\.datanodes|fuckingfast\.|dl\.fuckingfast|filekeeper\.|buzzheavier|bzzhr\.co|gofile\.|dropgalaxy|up4ever|files\.fm|filesfm|fireload|multifilemirror|k2s\.cc|keep2share(?:\.com)?|rapidgator\.net|rg\.to|nitroflare\.com|filefactory\.com|filefox\.cc|ddl-mirror|mirrored|nocdn|gdrive|mega\.co|bayfiles\.com|letsupload\.io|mixdrop\.co|streamtape\.com|doodstream\.com|filemoon\.sx|dropapk\.to|uploadhaven\.com|bowfile\.com|sendspace\.com|4shared\.com|dailyuploads\.net|hexupload\.net|down\.la|downupload\.com|clicknupload\.co|filejoker\.net|uploadgig\.com|alfafile\.net|multiup\.|devuploads\.com|voe\.sx|streamlare|streamvid|mp4upload|filepress\.org|filecrypt\.cc|keeplinks\.org|protect-link|link-protector|link-vault\.org|fileditch\.|vikingfile)/;
 
 export function isDownloadHref(href: string, base: string): boolean {
   if (SKIP_HREF.test(href)) return false;
@@ -473,6 +475,67 @@ function detectPart(url: string): { part?: number; partTotal?: number } {
 
 export function parseListingPage(html: string, url: string): ParsedEntry[] {
   const base = new URL(url).origin;
+  // FileCR is a Next.js app — listing entries live in __NEXT_DATA__.props.pageProps.posts
+  if (base.includes("filecr.com")) {
+    try {
+      const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (m) {
+        const data = JSON.parse(m[1]);
+        const posts: unknown[] = data?.props?.pageProps?.posts ?? data?.props?.pageProps?.items ?? [];
+        if (Array.isArray(posts) && posts.length > 0) {
+          const filecrEntries: ParsedEntry[] = (posts as { title?: string; slug?: string; extra_title?: string }[])
+            .map((p) => {
+              const title = cleanTitle(p.title || p.extra_title || p.slug || "");
+              const slug = (p.slug || "").trim();
+              const href = slug ? `https://filecr.com/macos/${slug}/` : "";
+              return title && href ? { title, url: href } : null;
+            })
+            .filter((e): e is ParsedEntry => !!e);
+          if (filecrEntries.length > 0) {
+            const seenF = new Set<string>();
+            const dedup: ParsedEntry[] = [];
+            for (const e of filecrEntries) {
+              if (seenF.has(e.url)) continue;
+              seenF.add(e.url);
+              dedup.push(e);
+            }
+            return dedup;
+          }
+        }
+      }
+    } catch {}
+  }
+  // GameDrive uses <h2><a> for entries; generic anchor scan picks up archive dates/nav — use targeted parse
+  if (base.includes("gamedrive.org")) {
+    try {
+      const gamedriveEntries: ParsedEntry[] = [];
+      const seenG = new Set<string>();
+      const h2Re = /<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>\s*<\/h2>/gi;
+      let mg: RegExpExecArray | null;
+      while ((mg = h2Re.exec(html)) !== null) {
+        const href = decodeEntities(mg[1].trim());
+        const text = decodeEntities(mg[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+        const abs = absoluteUrl(base, href);
+        if (!abs) continue;
+        const cleaned = cleanTitle(text);
+        if (cleaned.length < 3 || isGenericLinkName(cleaned)) continue;
+        if (seenG.has(abs)) continue;
+        seenG.add(abs);
+        gamedriveEntries.push({ title: cleaned, url: abs });
+      }
+      if (gamedriveEntries.length > 0) {
+        const byPath = new Map<string, ParsedEntry>();
+        for (const e of gamedriveEntries) {
+          try {
+            const path = new URL(e.url).pathname;
+            const ex = byPath.get(path);
+            if (!ex || ex.title.length > e.title.length) byPath.set(path, e);
+          } catch {}
+        }
+        return Array.from(byPath.values());
+      }
+    } catch {}
+  }
   const anchors = extractAnchors(html);
   const seen = new Set<string>();
   const entries: ParsedEntry[] = [];
@@ -491,8 +554,11 @@ export function parseListingPage(html: string, url: string): ParsedEntry[] {
       continue;
     }
     if (new RegExp(NAV_WORDS, "i").test(abs)) continue;
+    if (/\/\d{4}\/\d{2}\/?$/.test(abs)) continue;
     let cleaned = cleanTitle(text);
     if (cleaned.length < 3) continue;
+    if (/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$/i.test(cleaned)) continue;
+    if (/^(HomePage|Business With Us|Reupload Request|discord|telegram|youtube)$/i.test(cleaned)) continue;
     // Listing links whose anchor is "DOWNLOAD" (ElAmigos) / "click here" etc:
     // the game title comes from the surrounding heading, not the anchor.
     if (isGenericLinkName(cleaned)) {
@@ -550,6 +616,65 @@ function extractPassword(html: string): string | undefined {
 export function parseDetailPage(html: string, url: string): ParsedDetail {
   const base = new URL(url).origin;
   const sourceHost = new URL(url).hostname.replace(/^www\./, "");
+  // FileCR Next.js detail — data lives in __NEXT_DATA__.props.pageProps.post
+  if (sourceHost.includes("filecr.com")) {
+    try {
+      const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (m) {
+        const data = JSON.parse(m[1]);
+        const post: Record<string, unknown> = data?.props?.pageProps?.post;
+        if (post && typeof post.title === "string") {
+          const title = cleanTitle((post.title as string) || (post.extra_title as string) || "");
+          const media = (post as { media_files?: { icon?: string; feature?: string; header?: string; screenshots?: string[] } }).media_files;
+          const rawIcon =
+            (post as { icon?: string; cover?: string }).icon ||
+            (post as { cover?: string }).cover ||
+            media?.icon ||
+            media?.feature ||
+            "";
+          const image = typeof rawIcon === "string" && /^https?:/.test(rawIcon) ? rawIcon : "";
+          const excerpt = typeof post.excerpt === "string" ? post.excerpt : "";
+          const article = typeof post.article === "string" ? post.article : "";
+          const rawDesc = excerpt || article.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+          let description = decodeEntities(rawDesc).slice(0, 600);
+          if (description.length > 597) {
+            const cut = description.lastIndexOf(" ", 597);
+            description = description.slice(0, cut > 200 ? cut : 597) + "…";
+          }
+          // Download links are Internal and not exposed as URLs in the JSON — use the page URL as the official source
+          // and surface version/size from the downloads array.
+          const downloads: unknown[] = Array.isArray(post.downloads) ? (post.downloads as unknown[]) : [];
+          const firstDl = downloads[0] as { version?: string; links?: { size?: { value?: string; unit?: string } }[] } | undefined;
+          const sizeObj = firstDl?.links?.[0]?.size as { value?: string; unit?: string } | undefined;
+          const size = sizeObj?.value ? `${sizeObj.value} ${sizeObj.unit || "mb"}`.trim() : "";
+          const version = typeof firstDl?.version === "string" ? firstDl.version : "";
+          const dlUrl = url; // filecr page itself — user gets the official download flow
+          const screenshots: string[] = [];
+          // Prefer media_files screenshots/icon as primary visuals
+          if (media?.screenshots?.length) {
+            for (const u of (media.screenshots as string[]).slice(0, 8)) if (/^https?:/.test(u) && !screenshots.includes(u)) screenshots.push(u);
+          }
+          if (media?.icon && /^https?:/.test(media.icon) && !screenshots.includes(media.icon)) screenshots.unshift(media.icon);
+          const ogImgs = [...html.matchAll(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/gi)].map((x) => x[1]).filter((u) => /^https?:/.test(u));
+          for (const u of ogImgs.slice(0, 8)) if (!screenshots.includes(u)) screenshots.push(u);
+          if (image && !screenshots.includes(image)) screenshots.unshift(image);
+          let finalImage = image;
+          if (!finalImage && screenshots.length > 0) finalImage = screenshots[0];
+          const rawPw = extractPassword(html);
+          const password = rawPw && !/^(Company|Allavsoft|FileCR|Download)$/i.test(rawPw) ? rawPw : undefined;
+          return {
+            title: title || cleanTitle(url),
+            image: finalImage,
+            description: description || excerpt || title,
+            screenshots: screenshots.slice(0, 1),
+            links: dlUrl ? [{ name: "FileCR Official", url: dlUrl, type: "official" as const }] : [],
+            password,
+            contentType: /\/macos\//.test(url) || /\/mac\//.test(url) ? "software" : guessContentType(url, title),
+          };
+        }
+      }
+    } catch {}
+  }
 
   const ogTitle = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i)?.[1];
   const titleTag = html.match(/<title[^>]*>([\s\S]{0,150}?)<\/title>/i)?.[1];
@@ -612,17 +737,22 @@ export function parseDetailPage(html: string, url: string): ParsedDetail {
   const screenshots: string[] = [];
   const imgRe = /<img\b[^>]*src=["']([^"']+)["']/gi;
   let im: RegExpExecArray | null;
-  while ((im = imgRe.exec(html)) !== null) {
+  // Only harvest screenshots from the main article/content — prevents sidebar "Related Products" game banners leaking into app galleries
+  const screenshotSource = contentArea || html;
+  while ((im = imgRe.exec(screenshotSource)) !== null) {
     const src = decodeEntities(im[1]);
     if (!/^https?:/i.test(src)) continue;
-    if (/logo|icon|avatar|avatar|spacer|pixel|placeholder|\.svg|data:image/.test(src)) continue;
+    if (/logo|icon|avatar|spacer|pixel|placeholder|\.svg|data:image|cybar|join\.png|advert|banner/i.test(src)) continue;
     const abs = absoluteUrl(base, src);
     if (!abs || screenshots.includes(abs)) continue;
+    // Extra guard: skip images that look like unrelated product thumbnails from sidebar/related section when contentArea was empty (fallback to full html)
+    if (!contentArea && /class="card_|related|sidebar|widget/i.test(im[0])) continue;
     screenshots.push(abs);
     if (screenshots.length >= 8) break;
   }
   if (image && !screenshots.includes(image)) screenshots.unshift(image);
-  const finalScreenshots = screenshots.slice(0, 8);
+  const ctForScreenshots = guessContentType(url, title);
+  const finalScreenshots = ctForScreenshots === "software" ? screenshots.slice(0, 1) : screenshots.slice(0, 8);
 
   const links: ParsedLink[] = [];
   const seen = new Set<string>();
