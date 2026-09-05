@@ -10,6 +10,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pixelvault-db
+          property: connectionString
       - key: DATA_DIR
         value: /app/data
       - key: BROWSER_MAX_CONTEXTS
@@ -28,7 +32,9 @@ services:
         sync: false
       - key: RAWG_API_KEY
         sync: false
-    disk:
-      name: pixelvault_data
-      mountPath: /app/data
-      sizeGB: 1
+
+databases:
+  - name: pixelvault-db
+    plan: free
+    databaseName: pixelvault
+    user: pixelvault
