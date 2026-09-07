@@ -49,9 +49,6 @@ export const DEFAULTS = {
   placeholderImportBg: "3b82f6",
 } as const;
 
-// ── ScrapeGraph ─────────────────────────────────────────────────────
-export const SCRAPEGRAPH_ENABLED = !!process.env.SCRAPEGRAPH_API_KEY;
-
 // ── Tunables (env-overridable) ────────────────────────────────────────
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
