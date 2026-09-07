@@ -32,6 +32,10 @@ services:
         sync: false
       - key: RAWG_API_KEY
         sync: false
+      - key: SCRAPEGRAPH_API_KEY
+        sync: false
+      - key: SCRAPEGRAPH_API_URL
+        sync: false
 
 databases:
   - name: pixelvault-db

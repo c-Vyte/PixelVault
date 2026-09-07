@@ -141,7 +141,12 @@ function linkHealth(links: { url?: string; status?: string }[]): number {
 
 export default function AdminImport() {
   const [url, setUrl] = useState("");
-  const [mode, setMode] = useState<"site" | "page" | "paste">("site");
+  const [mode, setMode] = useState<"site" | "page" | "paste" | "links">("site");
+  const [linksInput, setLinksInput] = useState("");
+  const [linksHint, setLinksHint] = useState("");
+  const [linksResults, setLinksResults] = useState<{ url: string; titleHint: string; meta: { title?: string; description?: string; category?: string; platform?: string; tags?: string[]; features?: string[] } | null; banner?: string | null; provider?: string }[]>([]);
+  const [enrichingLinks, setEnrichingLinks] = useState(false);
+  const [linksUseScrapeGraph, setLinksUseScrapeGraph] = useState(false);
   const [source, setSource] = useState("");
   const [pasteHtml, setPasteHtml] = useState("");
   const [entries, setEntries] = useState<ParsedEntry[]>([]);
@@ -298,6 +303,80 @@ export default function AdminImport() {
       if (discoverAbortRef.current === controller) discoverAbortRef.current = null;
       setLoadingList(false);
     }
+  };
+
+  const handleEnrichLinks = async () => {
+    const urls = linksInput.split("\n").map((s) => s.trim()).filter((s) => /^https?:\/\//.test(s)).slice(0, 20);
+    if (urls.length === 0) { setError("Paste at least one https:// link"); setErrorInfo({ kind: "info", message: "Paste at least one https:// link" }); return; }
+    setEnrichingLinks(true); setError(""); setErrorInfo(null);
+    try {
+      // Optional ScrapeGraph pre-scrape to get better title hints
+      let hints: Record<string, string> = {};
+      if (linksUseScrapeGraph) {
+        const sgResults = await Promise.all(urls.map(async (u) => {
+          try {
+            const r = await fetch("/api/scrapegraph", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: u }) });
+            const d = await r.json() as { result?: { title?: string } };
+            return [u, d.result?.title || ""] as const;
+          } catch { return [u, ""] as const; }
+        }));
+        hints = Object.fromEntries(sgResults);
+      }
+      const res = await fetch("/api/links/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ links: urls, hint: linksHint || hints[urls[0]] || "" }),
+      });
+      const data = await res.json() as { results?: typeof linksResults; error?: string };
+      if (!res.ok) { setError(data.error || "Enrich failed"); setErrorInfo({ kind: "info", message: data.error || "Enrich failed" }); return; }
+      // Merge ScrapeGraph titles where Grok didn't return one
+      const enriched = (data.results || []).map((r) => ({ ...r, titleHint: (r as { titleHint: string }).titleHint || hints[(r as { url: string }).url] || (r as { url: string }).url }));
+      setLinksResults(enriched as typeof linksResults);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Enrich failed");
+    } finally { setEnrichingLinks(false); }
+  };
+
+  const handleImportLinks = async () => {
+    if (linksResults.length === 0) return;
+    const existing = await getSoftwareList();
+    const byTitle = new Map(existing.map((s) => [s.title.toLowerCase().trim(), s]));
+    const toAdd: typeof existing = [];
+    for (const r of linksResults) {
+      const meta = r.meta as { title?: string; description?: string; category?: string; platform?: string; tags?: string[]; features?: string[] } | null;
+      const title = meta?.title?.trim() || r.titleHint || r.url;
+      if (byTitle.has(title.toLowerCase().trim())) continue;
+      const cat = meta?.category && ["pc-games", "windows", "mac", "android", "movies", "ebooks", "tutorials", "korean"].includes(meta.category) ? meta.category : "pc-games";
+      const plat = (["windows", "mac", "android", "cross-platform"].includes(meta?.platform || "") ? meta!.platform : "windows") as Software["platform"];
+      const banner = (r.banner as string) || "";
+      toAdd.push({
+        id: `imported-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        title,
+        description: meta?.description || "",
+        category: cat,
+        subcategory: meta?.tags?.[0] || "",
+        platform: plat,
+        version: "",
+        size: "",
+        downloads: 0,
+        rating: 4.5,
+        icon: banner || "https://placehold.co/616x352/3b82f6/ffffff?text=Banner",
+        poster: banner || "https://placehold.co/600x900/3b82f6/ffffff?text=Poster",
+        screenshots: banner ? [banner] : [],
+        password: "",
+        downloadLinks: [{ name: "Download", url: r.url, type: "direct" as const }],
+        systemRequirements: "",
+        features: [...(meta?.features || []), ...((meta?.tags || []).map((t: string) => `Tag: ${t}`))],
+        videoUrl: (r as { videoUrl?: string }).videoUrl || undefined,
+        createdAt: new Date().toISOString(),
+        status: "pending" as const,
+      });
+    }
+    if (toAdd.length === 0) { setError("All links already exist"); return; }
+    await saveSoftwareList([...existing, ...toAdd]);
+    window.dispatchEvent(new Event("software-data-changed"));
+    setLinksResults([]); setLinksInput(""); setLinksHint("");
+    setImported(toAdd.length);
   };
 
   const cancelDiscover = () => {
@@ -966,25 +1045,64 @@ export default function AdminImport() {
           <div className="flex rounded-lg overflow-hidden border border-blue-900/50">
             <button
               onClick={() => setMode("site")}
-              className={`px-4 py-1.5 text-sm font-semibold ${mode === "site" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
+              className={`px-3 py-1.5 text-xs font-semibold ${mode === "site" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
             >
               Entire site
             </button>
             <button
               onClick={() => setMode("page")}
-              className={`px-4 py-1.5 text-sm font-semibold ${mode === "page" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
+              className={`px-3 py-1.5 text-xs font-semibold ${mode === "page" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
             >
               One listing page
             </button>
             <button
               onClick={() => setMode("paste")}
-              className={`px-4 py-1.5 text-sm font-semibold ${mode === "paste" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
+              className={`px-3 py-1.5 text-xs font-semibold ${mode === "paste" ? "bg-blue-600 text-white" : "bg-[#0a0f1a] text-blue-300/60 hover:text-white"}`}
             >
               Paste HTML
             </button>
+            <button
+              onClick={() => setMode("links")}
+              className={`px-3 py-1.5 text-xs font-semibold ${mode === "links" ? "bg-amber-600 text-white" : "bg-[#0a0f1a] text-amber-300/60 hover:text-white"}`}
+            >
+              Links only → Grok
+            </button>
           </div>
         </div>
-        {mode === "paste" ? (
+        {mode === "links" ? (
+          <>
+            <div className="rounded-lg border border-amber-900/30 bg-amber-950/20 p-3 mb-4">
+              <p className="text-amber-300/80 text-xs">Paste only download links — Grok AI will fetch the game name, description, banner and gameplay video.</p>
+            </div>
+            <label className="block text-sm font-semibold text-blue-300/80 mb-2">Download links (one per line, 1-20)</label>
+            <textarea value={linksInput} onChange={(e) => setLinksInput(e.target.value)} placeholder={"https://fuckingfast.co/abc123#game.part1.rar\nhttps://datanodes.to/def456\nhttps://gofile.io/d/xyz"} rows={6} className="w-full bg-[#0a0f1a] border border-blue-900/50 rounded-lg px-4 py-2.5 text-white placeholder-blue-300/30 focus:outline-none focus:border-amber-500 font-mono text-xs mb-3" />
+            <label className="block text-sm font-semibold text-blue-300/80 mb-2">Hint / page title (optional, helps Grok)</label>
+            <input value={linksHint} onChange={(e) => setLinksHint(e.target.value)} placeholder="e.g., Cyberpunk 2077 Phantom Liberty" className="w-full bg-[#0a0f1a] border border-blue-900/50 rounded-lg px-4 py-2.5 text-white placeholder-blue-300/30 focus:outline-none focus:border-blue-500 mb-3 text-sm" />
+            <label className="flex items-center gap-2 mb-4 cursor-pointer">
+              <input type="checkbox" checked={linksUseScrapeGraph} onChange={(e) => setLinksUseScrapeGraph(e.target.checked)} className="rounded border-blue-900/50" />
+              <span className="text-xs text-blue-300/70">Use ScrapeGraphAI pre-scrape (if SCRAPEGRAPH_API_KEY set)</span>
+            </label>
+            <div className="flex gap-2 mb-4">
+              <button onClick={handleEnrichLinks} disabled={enrichingLinks || !linksInput.trim()} className="px-5 py-2.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-500 disabled:opacity-50">{enrichingLinks ? "Grok enriching…" : "Enrich with Grok → Preview"}</button>
+              <button onClick={() => { setLinksInput(""); setLinksHint(""); setLinksResults([]); }} className="px-4 py-2.5 rounded-lg bg-[#0a0f1a] border border-blue-900/50 text-blue-300/70">Clear</button>
+            </div>
+            {linksResults.length > 0 && (
+              <div className="bg-[#0a0f1a] rounded-lg border border-blue-900/30 p-4">
+                <p className="text-blue-300/60 text-xs mb-3">{linksResults.length} enriched — review before import</p>
+                <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-2">
+                  {linksResults.map((r: { url: string; titleHint: string; meta: { title?: string } | null; banner?: string | null }, i: number) => (
+                    <div key={r.url} className="bg-[#111827] rounded-lg p-3 border border-blue-900/20">
+                      <p className="text-white text-sm font-bold truncate">{r.meta?.title || r.titleHint}</p>
+                      <p className="text-blue-300/50 text-xs truncate">{r.url}</p>
+                      {r.banner && <img src={r.banner} alt="" className="mt-2 h-20 w-auto rounded border border-blue-900/30" />}
+                    </div>
+                  ))}
+                </div>
+                <button onClick={handleImportLinks} className="mt-4 w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-lg font-bold">Import {linksResults.length} as pending</button>
+              </div>
+            )}
+          </>
+        ) : mode === "paste" ? (
           <>
             <label className="block text-sm font-semibold text-blue-300/80 mb-2">
               Source page URL (optional, just for recognition)
