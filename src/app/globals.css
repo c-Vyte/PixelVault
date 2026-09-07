@@ -328,6 +328,23 @@ html[data-site-mode="light"] .text-slate-300,
 html[data-site-mode="light"] .text-slate-400,
 html[data-site-mode="light"] .text-slate-500 { color: var(--muted) !important; }
 .media-overlay-text { color: #ffffff !important; }
+
+/* Admin console — always dark, immune to site light theme (client white theme was making admin text black on dark bg) */
+.admin-console {
+  color-scheme: dark;
+  --foreground: #F3F4F6;
+  --muted: #94A3B8;
+  --card-bg: #12161E;
+  --card-bg-elevated: #181E29;
+  --card-border: #1E293B;
+  --background: #0a0f1a;
+}
+.admin-console .text-white { color: #ffffff !important; }
+.admin-console input,
+.admin-console textarea,
+.admin-console select { color: #ffffff !important; }
+.admin-console input::placeholder,
+.admin-console textarea::placeholder { color: rgba(147, 197, 253, 0.35) !important; }
 html[data-site-mode="light"] .bg-slate-950,
 html[data-site-mode="light"] .bg-slate-900 { background-color: var(--card-bg) !important; }
 html[data-site-mode="light"] .bg-slate-800 { background-color: var(--card-bg-elevated) !important; }

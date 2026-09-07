@@ -151,6 +151,7 @@ export default function AdminImport() {
   const [error, setError] = useState("");
   /** Structured error so the banner can offer the right recovery action. */
   const [errorInfo, setErrorInfo] = useState<{ kind: "blocked" | "network" | "empty" | "info"; message: string } | null>(null);
+  const [scraperFallback, setScraperFallback] = useState<string | null>(null);
   const discoverAbortRef = useRef<AbortController | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [imported, setImported] = useState(0);
@@ -368,6 +369,7 @@ export default function AdminImport() {
   const fetchDetails = async () => {
     if (selected.size === 0) return;
     setError("");
+    setScraperFallback(null);
     setLoadingDetails(true);
     cancelledRef.current = false;
     abortRef.current?.abort();
@@ -375,6 +377,8 @@ export default function AdminImport() {
     abortRef.current = controller;
     const queue = items.map((it, i) => ({ it, i })).filter(({ i }) => selected.has(i));
     setProgress({ done: 0, total: queue.length });
+    let hadScrapeFallback = false;
+    let fallbackReason = "";
     for (let q = 0; q < queue.length; q++) {
       if (cancelledRef.current) break;
       const { it, i } = queue[q];
@@ -384,22 +388,25 @@ export default function AdminImport() {
         return copy;
       });
       if (it.detail) {
+        // Still check if existing detail was from fallback
+        if ((it.detail as { scrapeGraphFailed?: boolean }).scrapeGraphFailed) { hadScrapeFallback = true; fallbackReason = (it.detail as { scrapeGraphError?: string }).scrapeGraphError || "ScrapeGraph failed"; }
         if (cancelledRef.current) break;
         setProgress({ done: q + 1, total: queue.length });
         continue;
       }
       try {
         const res = await fetch(`/api/import/detail?url=${encodeURIComponent(it.entry.url)}`, { signal: controller.signal });
-        const data = await res.json();
+        const data = await res.json() as { scrapeGraphFailed?: boolean; scrapeGraphError?: string; scraper?: string } & Record<string, unknown>;
         if (cancelledRef.current) { setLoadingDetails(false); return; }
+        if (data.scrapeGraphFailed) { hadScrapeFallback = true; fallbackReason = data.scrapeGraphError || "ScrapeGraph failed"; }
         setItems((prev) => {
           const copy = [...prev];
           if (res.ok) {
-            copy[i] = { ...copy[i], detail: data, loading: false };
+            copy[i] = { ...copy[i], detail: data as unknown as ImportItem["detail"], loading: false };
           } else {
-            const errMsg = data.blocked
+            const errMsg = (data as { blocked?: boolean; error?: string }).blocked
               ? "Blocked (Cloudflare) — use Paste HTML mode"
-              : data.error || "Failed to fetch";
+              : (data as { error?: string }).error || "Failed to fetch";
             copy[i] = { ...copy[i], error: errMsg, loading: false };
           }
           return copy;
@@ -419,6 +426,9 @@ export default function AdminImport() {
     }
     abortRef.current = null;
     setLoadingDetails(false);
+    if (hadScrapeFallback) {
+      setScraperFallback(`ScrapeGraph failed${fallbackReason ? `: ${fallbackReason}` : ""} — switched to normal scraping for ${selected.size} item(s). Check links, then use Paste HTML if needed.`);
+    }
     // Check for generic link names and suggest better ones
     checkAndPromptNameSuggestions();
   };
@@ -1126,6 +1136,16 @@ export default function AdminImport() {
                   </p>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+        {scraperFallback && (
+          <div className="mt-4 rounded-lg border border-amber-700/40 bg-amber-950/30 p-4 flex items-start gap-3">
+            <span className="text-lg">⚙️</span>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-amber-200">ScrapeGraph fallback</p>
+              <p className="text-sm text-amber-100/80 mt-1">{scraperFallback}</p>
+              <button onClick={() => setScraperFallback(null)} className="mt-2 text-xs text-amber-300 hover:text-amber-200 underline">Dismiss</button>
             </div>
           </div>
         )}

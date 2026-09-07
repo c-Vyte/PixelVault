@@ -71,18 +71,31 @@ export async function GET(request: NextRequest) {
 
   const finalUrl = result.finalUrl || url;
 
-  // ScrapeGraph is now PRIMARY for download links — replaces normal scraping when API key is set
+  // ScrapeGraph is now PRIMARY for download links — replaces normal scraping when API key is set; fallback to old with prompt if it fails
   let sgLinks: { name: string; url: string; type?: string }[] | null = null;
   let sgTitle: string | undefined;
   let sgDesc: string | undefined;
-  try {
-    const sg = await scrapeDownloadLinksWithScrapeGraph(url);
-    if (sg && sg.links.length > 0) {
-      sgLinks = sg.links;
-      sgTitle = sg.title;
-      sgDesc = sg.description;
+  let usedScraper: "scrapegraph" | "fallback" = "fallback";
+  let scrapeGraphFailed = false;
+  let scrapeGraphError = "";
+  const hasSgKey = !!process.env.SCRAPEGRAPH_API_KEY;
+  if (hasSgKey) {
+    try {
+      const sg = await scrapeDownloadLinksWithScrapeGraph(url);
+      if (sg && sg.links.length > 0) {
+        sgLinks = sg.links;
+        sgTitle = sg.title;
+        sgDesc = sg.description;
+        usedScraper = "scrapegraph";
+      } else {
+        scrapeGraphFailed = true;
+        scrapeGraphError = "ScrapeGraph returned no links";
+      }
+    } catch (e) {
+      scrapeGraphFailed = true;
+      scrapeGraphError = e instanceof Error ? e.message : "ScrapeGraph failed";
     }
-  } catch {}
+  }
 
   const parsed = parseDetailPage(result.text, finalUrl);
   // Override with ScrapeGraph links if available (primary)
@@ -95,6 +108,9 @@ export async function GET(request: NextRequest) {
     if (sgTitle) parsed.title = sgTitle;
     if (sgDesc) parsed.description = sgDesc;
     recordApiCall({ route: "/api/import/detail", provider: "scrapegraph", ok: true, latencyMs: Date.now() - started, items: parsed.links.length });
+  } else if (hasSgKey && scrapeGraphFailed) {
+    // ScrapeGraph was tried but failed — we are falling back to normal scraper, caller should prompt user
+    usedScraper = "fallback";
   }
 
   const usableLinks = parsed.links.filter((l) => l.url && l.url.trim());
@@ -121,6 +137,9 @@ export async function GET(request: NextRequest) {
     contentType: parsed.contentType || guessContentType(finalUrl, parsed.title),
     finalUrl,
     sourceHost: parsedUrl.hostname.replace(/^www\./, ""),
+    scraper: usedScraper,
+    scrapeGraphFailed,
+    scrapeGraphError: scrapeGraphFailed ? scrapeGraphError : undefined,
     // Helpful summary the UI can surface without re-walking the links.
     linkSummary: {
       total: usableLinks.length,
