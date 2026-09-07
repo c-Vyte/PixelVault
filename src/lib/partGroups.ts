@@ -25,7 +25,7 @@ export interface GroupedLink {
   status?: "unknown";
 }
 
-/** Extract a "part N" number from a URL (path or hash fragment), else null. */
+/** Extract a "part N" number from a URL (path or hash fragment), else null. Supports: part1.rar, part01.rar, _part1, .001, .r00, .r01 */
 export function detectPartNumber(url: string): number | null {
   if (!url || url.startsWith("magnet:")) return null;
   let file = "";
@@ -37,13 +37,16 @@ export function detectPartNumber(url: string): number | null {
   } catch {
     file = url;
   }
-  // part1.rar / part01.rar / .part1.rar / _part1 / .001
+  // part1.rar / part01.rar / .part1.rar / _part01 / .r00 / .r01 / .001
   const m =
-    file.match(/[._-]part?0*(\d+)\s*(?:\.(?:rar|zip|7z|exe))?\s*$/i) ||
+    file.match(/[._-]part?0*(\d+)\s*(?:\.(?:rar|zip|7z|exe|001))?\s*$/i) ||
+    file.match(/\.r0*(\d{1,3})(?:\.|$)/i) ||
     file.match(/\.(\d{3})(?:\.|$)/);
   if (m) {
     const n = parseInt(m[1], 10);
-    if (n >= 1 && n <= 999) return n;
+    // .r00 is actually part 0 in WinRAR old style (file.r00 = part 1), normalize to 1
+    if (/\.r0*0+(?:\.|$)/i.test(file) && n === 0) return 1;
+    if (n >= 0 && n <= 999) return n === 0 ? 1 : n;
   }
   return null;
 }
@@ -72,7 +75,8 @@ function archiveBaseName(url: string): string {
     file = url;
   }
   return file
-    .replace(/[._-]part?0*\d+\s*(\.(rar|zip|7z|exe))?$/i, "$1")
+    .replace(/[._-]part?0*\d+\s*(\.(rar|zip|7z|exe|001))?$/i, "$1")
+    .replace(/\.r0*\d+(\.|$)/i, "$1")
     .replace(/\.\d{3}(\.|$)/i, "$1")
     .toLowerCase()
     .replace(/\.[a-z0-9]{2,5}$/i, "");
@@ -109,23 +113,37 @@ export function groupLinks(raw: RawLink[], classifyType?: (url: string) => LinkT
     }
   }
 
-  // Emit grouped multipart entries first.
+  // Emit grouped multipart entries first — renumber sequentially (1..N) for clean display
   for (const [, arr] of groups) {
     if (arr.length === 0) continue;
     const sorted = [...arr].sort((a, b) => a.part - b.part);
-    const max = Math.max(...sorted.map((s) => s.part));
-    // Only treat as a multipart repack when there really are multiple parts.
-    if (sorted.length > 1 || max > 1) {
+    // Only treat as a multipart repack when there really are multiple parts
+    if (sorted.length > 1) {
+      // Detect gaps (e.g., part40,41) — we still show 1..N sequentially, but preserve original for reference
       out.push({
         name: sorted[0].name.replace(/\s*[\(\[]?part\s*\d+[\)\]]?.*$/i, "").trim() || "Repack",
         url: sorted[0].url,
         type: "repack",
-        parts: max,
-        partLinks: sorted.map((s) => ({ part: s.part, url: s.url })),
+        parts: sorted.length,
+        partLinks: sorted.map((s, idx) => ({ part: idx + 1, url: s.url })),
         status: "unknown",
       });
     } else {
-      out.push({ name: sorted[0].name, url: sorted[0].url, type: sorted[0].type, parts: 1, partLinks: [], status: "unknown" });
+      const singlePart = sorted[0].part;
+      // Single file that looks like part01.rar but is actually single (e.g., fg-optional-hd-textures.part01.rar with only 1 link)
+      // Treat as single direct if it's the only file and part==1, else as 1-part repack if part>1 (e.g., orphan part40)
+      if (singlePart > 1) {
+        out.push({
+          name: sorted[0].name.replace(/\s*[\(\[]?part\s*\d+[\)\]]?.*$/i, "").trim() || "Repack",
+          url: sorted[0].url,
+          type: "repack",
+          parts: 1,
+          partLinks: [{ part: 1, url: sorted[0].url }],
+          status: "unknown",
+        });
+      } else {
+        out.push({ name: sorted[0].name, url: sorted[0].url, type: sorted[0].type, parts: 1, partLinks: [], status: "unknown" });
+      }
     }
   }
 
