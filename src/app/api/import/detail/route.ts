@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseDetailPage, guessContentType } from "@/lib/importParser";
+import { parseDetailPage, guessContentType, classifyLinkType } from "@/lib/importParser";
 import { fetchWithFallback } from "@/lib/fetchers";
 import { isCloudflareChallenge } from "@/lib/fetchUtils";
 import { recordApiCall } from "@/lib/apiUsage";
+import { scrapeDownloadLinksWithScrapeGraph } from "@/lib/scrapegraph";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -69,7 +70,32 @@ export async function GET(request: NextRequest) {
   }
 
   const finalUrl = result.finalUrl || url;
+
+  // ScrapeGraph is now PRIMARY for download links — replaces normal scraping when API key is set
+  let sgLinks: { name: string; url: string; type?: string }[] | null = null;
+  let sgTitle: string | undefined;
+  let sgDesc: string | undefined;
+  try {
+    const sg = await scrapeDownloadLinksWithScrapeGraph(url);
+    if (sg && sg.links.length > 0) {
+      sgLinks = sg.links;
+      sgTitle = sg.title;
+      sgDesc = sg.description;
+    }
+  } catch {}
+
   const parsed = parseDetailPage(result.text, finalUrl);
+  // Override with ScrapeGraph links if available (primary)
+  if (sgLinks && sgLinks.length > 0) {
+    parsed.links = sgLinks.map((l) => ({
+      name: l.name || "Download",
+      url: l.url,
+      type: classifyLinkType(l.url) as "direct" | "repack" | "torrent" | "official" | "cracked",
+    }));
+    if (sgTitle) parsed.title = sgTitle;
+    if (sgDesc) parsed.description = sgDesc;
+    recordApiCall({ route: "/api/import/detail", provider: "scrapegraph", ok: true, latencyMs: Date.now() - started, items: parsed.links.length });
+  }
 
   const usableLinks = parsed.links.filter((l) => l.url && l.url.trim());
   const directCount = usableLinks.filter((l) => l.type !== "torrent" && !l.url.startsWith("magnet:")).length;

@@ -17,6 +17,7 @@
     "next-auth": "^4.24.11",
     "otpauth": "^9.3.2",
     "qrcode": "^1.5.4",
+    "scrapegraph-js": "^0.0.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
