@@ -1,6 +1,19 @@
-import { MetadataRoute } from "next";
-import { softwareData, categories } from "@/lib/data";
+import type { MetadataRoute } from "next";
+import { getPublishedSoftwareList } from "@/lib/data";
 import { SITE_URL } from "@/lib/siteConfig";
+
+export const dynamic = "force-dynamic";
+
+const CATEGORIES = [
+  "pc-games",
+  "windows",
+  "mac",
+  "android",
+  "movies",
+  "ebooks",
+  "tutorials",
+  "korean",
+] as const;
 
 const staticPages = [
   "",
@@ -14,27 +27,30 @@ const staticPages = [
   "request",
 ];
 
-export default function sitemap(): MetadataRoute.Sitemap {
-  const staticRoutes = staticPages.map((path) => ({
-    url: `${SITE_URL}/${path}`,
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const staticRoutes: MetadataRoute.Sitemap = staticPages.map((path) => ({
+    url: path ? `${SITE_URL}/${path}` : `${SITE_URL}/`,
     lastModified: new Date(),
-    changeFrequency: "weekly" as const,
+    changeFrequency: "weekly",
     priority: path === "" ? 1 : 0.6,
   }));
 
-  const softwareRoutes = softwareData.map((sw) => ({
-    url: `${SITE_URL}/software/${sw.id}`,
-    lastModified: new Date(sw.updatedAt || sw.createdAt),
-    changeFrequency: "weekly" as const,
-    priority: 0.8,
-  }));
-
-  const categoryRoutes = categories.map((cat) => ({
-    url: `${SITE_URL}/category/${cat.id}`,
+  const categoryRoutes: MetadataRoute.Sitemap = CATEGORIES.map((cat) => ({
+    url: `${SITE_URL}/category/${cat}`,
     lastModified: new Date(),
-    changeFrequency: "weekly" as const,
+    changeFrequency: "weekly",
     priority: 0.7,
   }));
 
-  return [...staticRoutes, ...softwareRoutes, ...categoryRoutes];
+  // Dynamic software entries — only published items with valid download links
+  const softwareList = await getPublishedSoftwareList();
+
+  const softwareRoutes: MetadataRoute.Sitemap = softwareList.map((sw) => ({
+    url: `${SITE_URL}/software/${sw.id}`,
+    lastModified: sw.updatedAt ? new Date(sw.updatedAt) : sw.createdAt ? new Date(sw.createdAt) : new Date(),
+    changeFrequency: "weekly",
+    priority: 0.8,
+  }));
+
+  return [...staticRoutes, ...categoryRoutes, ...softwareRoutes];
 }

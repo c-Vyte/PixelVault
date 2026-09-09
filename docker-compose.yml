@@ -12,7 +12,9 @@ services:
       - DATA_DIR=/app/data
       - BROWSER_MAX_CONTEXTS=2
       - BROWSER_IDLE_MS=300000
+      - CRON_SECRET=${CRON_SECRET:-}
     restart: unless-stopped
+    # Nightly backup via host cron: 0 3 * * * curl -H "x-cron-secret: $CRON_SECRET" http://localhost:3000/api/cron/backup
 
 volumes:
   pixelvault_data:

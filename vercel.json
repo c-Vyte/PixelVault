@@ -7,5 +7,6 @@
     "src/app/api/ai/**": { "maxDuration": 60 },
     "src/app/api/software/**": { "maxDuration": 10 }
   },
+  "crons": [{ "path": "/api/cron/backup?secret=$CRON_SECRET", "schedule": "0 3 * * *" }],
   "regions": ["iad1"]
 }
