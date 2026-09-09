@@ -3,14 +3,16 @@ import path from "path";
 import type { Software } from "./data";
 
 // Neon Postgres for Vercel (ephemeral fs) — falls back to file volume for Hetzner/Render
-// Supports custom prefix (e.g., STORAGE_DATABASE_URL when user sets STORAGE in Vercel Neon UI)
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  process.env.POSTGRES_URL ||
-  process.env.STORAGE_DATABASE_URL ||
-  process.env.STORAGE_POSTGRES_URL ||
-  process.env.STORAGE_URL ||
-  "";
+// Supports any custom prefix (STORAGE_, NEON_, PIXEL_, etc.) — Vercel Neon UI lets user set prefix
+const DATABASE_URL = (() => {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  if (process.env.POSTGRES_URL) return process.env.POSTGRES_URL;
+  // Check for custom prefix vars like STORAGE_DATABASE_URL, NEON_DATABASE_URL, etc.
+  for (const [k, v] of Object.entries(process.env)) {
+    if ((k.endsWith("DATABASE_URL") || k.endsWith("POSTGRES_URL")) && typeof v === "string" && v) return v;
+  }
+  return "";
+})();
 
 async function neonGetAll(): Promise<Software[] | null> {
   if (!DATABASE_URL) return null;
